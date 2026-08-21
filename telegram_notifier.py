@@ -43,12 +43,18 @@ Messages envoyes :
 import logging
 import json
 import os
+import ssl
 import urllib.request
 import urllib.error
 import urllib.parse
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +108,15 @@ class TelegramNotifier:
         self._last_quality_alert = 0
 
         self._test_connection()
+
+    @staticmethod
+    def _ssl_context():
+        if certifi is not None:
+            return ssl.create_default_context(cafile=certifi.where())
+        return ssl.create_default_context()
+
+    def _urlopen(self, request, timeout):
+        return urllib.request.urlopen(request, timeout=timeout, context=self._ssl_context())
 
     def _test_connection(self):
         if not self.enabled:
@@ -160,7 +175,7 @@ class TelegramNotifier:
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(url, data=data, method="POST",
                                           headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with self._urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read().decode())
                 if not result.get("ok"):
                     logger.debug(f"Telegram API error: {result}")

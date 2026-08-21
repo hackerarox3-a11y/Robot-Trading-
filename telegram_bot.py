@@ -42,6 +42,7 @@ Ameliorations v4 :
 import json
 import logging
 import os
+import ssl
 import threading
 import time
 import urllib.request
@@ -50,6 +51,11 @@ import urllib.parse
 import csv
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +153,20 @@ class TelegramCommandBot:
         self._thread.start()
         logger.info("Serveur de commandes Telegram demarre.")
 
+    @staticmethod
+    def _ssl_context():
+        if certifi is not None:
+            return ssl.create_default_context(cafile=certifi.where())
+        return ssl.create_default_context()
+
+    def _urlopen(self, request, timeout):
+        return urllib.request.urlopen(request, timeout=timeout, context=self._ssl_context())
+
     def _validate_token(self) -> bool:
         """Verifie le token via Telegram avant de lancer le polling."""
         url = f"{self.TELEGRAM_API.format(token=self.token)}/getMe"
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            with self._urlopen(url, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
             if data.get("ok"):
                 bot = data.get("result", {})
@@ -193,7 +208,7 @@ class TelegramCommandBot:
             "allowed_updates": json.dumps(["message", "callback_query"]),
         })
         req = urllib.request.Request(f"{url}?{params}")
-        with urllib.request.urlopen(req, timeout=35) as resp:
+        with self._urlopen(req, timeout=35) as resp:
             data = json.loads(resp.read().decode())
         for update in data.get("result", []):
             self._offset = update["update_id"] + 1
@@ -235,7 +250,7 @@ class TelegramCommandBot:
                 "timeout": 1,
             })
             req = urllib.request.Request(f"{url}?{params}")
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with self._urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
                 for update in data.get("result", []):
                     self._offset = update["update_id"] + 1
@@ -296,7 +311,7 @@ class TelegramCommandBot:
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(url, data=data, method="POST",
                                           headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with self._urlopen(req, timeout=5) as resp:
                 pass
         except Exception as e:
             logger.debug(f"Reponse callback echouee: {e}")
@@ -794,7 +809,7 @@ class TelegramCommandBot:
         req = urllib.request.Request(url, data=data, method="POST",
                                       headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with self._urlopen(req, timeout=10) as resp:
                 result = json.loads(resp.read().decode())
                 if not result.get("ok"):
                     logger.debug(f"Telegram send error: {result}")
