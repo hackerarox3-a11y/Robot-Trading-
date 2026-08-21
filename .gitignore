@@ -11,3 +11,4 @@ trading_bot.log
 trades_history.csv
 *_deriv.json
 *_mt5.json
+compound_state_*.json
