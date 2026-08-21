@@ -1,0 +1,364 @@
+{
+  "active_broker": "both",
+  "broker": "both",
+
+  "brokers": {
+    "deriv": {
+      "enabled": true,
+      "symbols": ["R_75", "R_100", "BOOM1000", "CRASH1000", "frxEURUSD"]
+    },
+    "mt5": {
+      "enabled": true,
+      "symbols": ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF"]
+    }
+  },
+
+  "mt5": {
+    "login": 0,
+    "password": "",
+    "server": "",
+    "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+  },
+
+  "deriv": {
+    "app_id": 1089,
+    "api_token": "",
+    "ws_url": "wss://ws.derivws.com/websockets/v3"
+  },
+
+  "trading": {
+    "symbols": ["R_75", "R_100", "BOOM1000", "CRASH1000", "frxEURUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF"],
+    "timeframe": "M5",
+    "max_open_positions": 4,
+    "default_lot_size": 0.35,
+    "max_lot_size": 10.0,
+    "min_lot_size": 0.35,
+    "lot_step": 0.35,
+    "magic_number": 987654,
+    "deviation_slippage": 20
+  },
+
+  "symbol_profiles": {
+    "XAUUSD": {
+      "pip_size": 0.01,
+      "pip_value_per_lot": 1.0,
+      "contract_size": 100,
+      "default_sl_pips": 300,
+      "default_tp_pips": 500,
+      "atr_sl_multiplier": 2.0,
+      "atr_tp_multiplier": 3.5,
+      "trailing_stop_pips": 200,
+      "trailing_step_pips": 50,
+      "break_even_after_pips": 150,
+      "max_lot": 0.10,
+      "strategy_weights": {
+        "trend_following": 0.40,
+        "rsi_reversal": 0.15,
+        "macd_crossover": 0.20,
+        "bollinger_bounce": 0.10,
+        "adx_filter": 0.15,
+        "buy_threshold": 0.55,
+        "sell_threshold": -0.55
+      },
+      "indicators_override": {
+        "ema_fast": 13,
+        "ema_medium": 34,
+        "ema_slow": 89,
+        "ema_trend": 200,
+        "rsi_period": 14,
+        "adx_period": 14,
+        "adx_threshold": 30
+      }
+    },
+    "EURUSD": {
+      "pip_size": 0.0001,
+      "pip_value_per_lot": 10.0,
+      "default_sl_pips": 40,
+      "default_tp_pips": 65,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 25,
+      "trailing_step_pips": 8,
+      "break_even_after_pips": 20,
+      "max_lot": 0.50
+    },
+    "GBPUSD": {
+      "pip_size": 0.0001,
+      "pip_value_per_lot": 10.0,
+      "default_sl_pips": 50,
+      "default_tp_pips": 80,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 30,
+      "trailing_step_pips": 10,
+      "break_even_after_pips": 25,
+      "max_lot": 0.50
+    },
+    "USDJPY": {
+      "pip_size": 0.01,
+      "pip_value_per_lot": 6.5,
+      "default_sl_pips": 40,
+      "default_tp_pips": 65,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 25,
+      "trailing_step_pips": 8,
+      "break_even_after_pips": 20,
+      "max_lot": 0.50
+    },
+    "USDCHF": {
+      "pip_size": 0.0001,
+      "pip_value_per_lot": 10.0,
+      "default_sl_pips": 40,
+      "default_tp_pips": 65,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 25,
+      "trailing_step_pips": 8,
+      "break_even_after_pips": 20,
+      "max_lot": 0.50
+    },
+    "R_75": {
+      "pip_size": 0.01,
+      "pip_value_per_lot": 1.0,
+      "default_sl_pips": 50,
+      "default_tp_pips": 80,
+      "atr_sl_multiplier": 1.8,
+      "atr_tp_multiplier": 3.0,
+      "trailing_stop_pips": 40,
+      "trailing_step_pips": 10,
+      "break_even_after_pips": 30,
+      "max_lot": 5.0,
+      "strategy_weights": {
+        "trend_following": 0.40,
+        "rsi_reversal": 0.15,
+        "macd_crossover": 0.20,
+        "bollinger_bounce": 0.10,
+        "adx_filter": 0.15,
+        "buy_threshold": 0.50,
+        "sell_threshold": -0.50
+      },
+      "indicators_override": {
+        "ema_fast": 5,
+        "ema_medium": 13,
+        "ema_slow": 34,
+        "rsi_period": 10,
+        "rsi_overbought": 75,
+        "rsi_oversold": 25
+      }
+    },
+    "R_100": {
+      "pip_size": 0.01,
+      "pip_value_per_lot": 1.0,
+      "default_sl_pips": 60,
+      "default_tp_pips": 100,
+      "atr_sl_multiplier": 1.8,
+      "atr_tp_multiplier": 3.0,
+      "trailing_stop_pips": 50,
+      "trailing_step_pips": 15,
+      "break_even_after_pips": 35,
+      "max_lot": 5.0,
+      "strategy_weights": {
+        "trend_following": 0.40,
+        "rsi_reversal": 0.15,
+        "macd_crossover": 0.20,
+        "bollinger_bounce": 0.10,
+        "adx_filter": 0.15,
+        "buy_threshold": 0.50,
+        "sell_threshold": -0.50
+      },
+      "indicators_override": {
+        "ema_fast": 5,
+        "ema_medium": 13,
+        "ema_slow": 34,
+        "rsi_period": 10,
+        "rsi_overbought": 75,
+        "rsi_oversold": 25
+      }
+    },
+    "BOOM1000": {
+      "pip_size": 0.01,
+      "pip_value_per_lot": 1.0,
+      "default_sl_pips": 40,
+      "default_tp_pips": 70,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 30,
+      "trailing_step_pips": 10,
+      "break_even_after_pips": 25,
+      "max_lot": 3.0,
+      "strategy_weights": {
+        "trend_following": 0.30,
+        "rsi_reversal": 0.25,
+        "macd_crossover": 0.20,
+        "bollinger_bounce": 0.15,
+        "adx_filter": 0.10,
+        "buy_threshold": 0.50,
+        "sell_threshold": -0.50
+      }
+    },
+    "CRASH1000": {
+      "pip_size": 0.01,
+      "pip_value_per_lot": 1.0,
+      "default_sl_pips": 40,
+      "default_tp_pips": 70,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 30,
+      "trailing_step_pips": 10,
+      "break_even_after_pips": 25,
+      "max_lot": 3.0,
+      "strategy_weights": {
+        "trend_following": 0.30,
+        "rsi_reversal": 0.25,
+        "macd_crossover": 0.20,
+        "bollinger_bounce": 0.15,
+        "adx_filter": 0.10,
+        "buy_threshold": 0.50,
+        "sell_threshold": -0.50
+      }
+    },
+    "frxEURUSD": {
+      "pip_size": 0.0001,
+      "pip_value_per_lot": 10.0,
+      "default_sl_pips": 40,
+      "default_tp_pips": 65,
+      "atr_sl_multiplier": 1.5,
+      "atr_tp_multiplier": 2.5,
+      "trailing_stop_pips": 25,
+      "trailing_step_pips": 8,
+      "break_even_after_pips": 20,
+      "max_lot": 10.0
+    }
+  },
+
+  "risk_management": {
+    "max_risk_per_trade_pct": 1.0,
+    "max_daily_loss_pct": 3.0,
+    "max_daily_trades": 12,
+    "use_trailing_stop": true,
+    "trailing_stop_pips": 30,
+    "trailing_step_pips": 10,
+    "break_even_after_pips": 25,
+    "move_sl_to_be_pips": 5
+  },
+
+  "stop_loss_take_profit": {
+    "default_stop_loss_pips": 50,
+    "default_take_profit_pips": 80,
+    "risk_reward_ratio": 1.6,
+    "use_dynamic_sl_tp": true,
+    "atr_period": 14,
+    "atr_sl_multiplier": 1.5,
+    "atr_tp_multiplier": 2.5
+  },
+
+  "indicators": {
+    "ema_fast": 8,
+    "ema_medium": 21,
+    "ema_slow": 50,
+    "ema_trend": 200,
+    "rsi_period": 14,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "adx_period": 14,
+    "adx_threshold": 25,
+    "bollinger_period": 20,
+    "bollinger_std": 2.0,
+    "atr_period": 14
+  },
+
+  "strategy_weights": {
+    "trend_following": 0.35,
+    "rsi_reversal": 0.20,
+    "macd_crossover": 0.20,
+    "bollinger_bounce": 0.15,
+    "adx_filter": 0.10,
+    "buy_threshold": 0.60,
+    "sell_threshold": -0.60
+  },
+
+  "timing": {
+    "scan_interval_seconds": 30,
+    "candle_history_bars": 500,
+    "avoid_news_minutes": 30
+  },
+
+  "session_filter": {
+    "enabled": false
+  },
+
+  "logging": {
+    "level": "INFO",
+    "log_to_file": true,
+    "log_file": "trading_bot.log",
+    "log_trades_to_csv": true,
+    "trades_csv_file": "trades_history.csv"
+  },
+
+  "auto_market_select": {
+    "enabled": true,
+    "min_score_to_trade": 50
+  },
+
+  "compound_growth": {
+    "enabled": true,
+    "win_boost_pct": 20,
+    "loss_reduction_pct": 30,
+    "max_boost_streak": 3,
+    "max_reduction_streak": 2,
+    "state_file": "compound_state.json"
+  },
+
+  "multi_timeframe": {
+    "enabled": true,
+    "confirm_timeframes": ["M15", "H1"],
+    "min_agreement": 1,
+    "bars_per_timeframe": 300,
+    "mode": "strict",
+    "use_structure": true,
+    "use_momentum": true,
+    "lot_multiplier": true
+  },
+
+  "news_filter": {
+    "enabled": true,
+    "avoid_high_impact": true,
+    "avoid_medium_impact": true,
+    "avoid_low_impact": false,
+    "mode": "block",
+    "web_fetch": true,
+    "cache_hours": 4,
+    "custom_avoid_minutes": null,
+    "whitelist": [],
+    "cache_file": "news_cache.json"
+  },
+
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": "",
+    "allowed_chat_ids": [],
+    "admin_password": "",
+    "notify_trades": true,
+    "notify_pnl": true,
+    "notify_errors": true,
+    "notify_reports": true,
+    "notify_news": true,
+    "notify_streaks": true,
+    "silent_hours": null,
+    "rate_limit_seconds": 3
+  },
+
+  "backtest": {
+    "initial_balance": 100,
+    "payout_ratio": 0.85,
+    "max_concurrent_positions": 2,
+    "max_bars_held": 12,
+    "include_mtf": false,
+    "include_news_filter": false
+  }
+}

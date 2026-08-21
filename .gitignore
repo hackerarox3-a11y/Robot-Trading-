@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.bot_state.json
+.bot_write_test
+*.log
+news_cache.json
+trading_bot.log
+trades_history.csv
+*_deriv.json
+*_mt5.json
