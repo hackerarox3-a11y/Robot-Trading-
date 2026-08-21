@@ -318,7 +318,7 @@
     "confirm_timeframes": ["M15", "H1"],
     "min_agreement": 1,
     "bars_per_timeframe": 300,
-    "mode": "strict",
+    "mode": "partial",
     "use_structure": true,
     "use_momentum": true,
     "lot_multiplier": true

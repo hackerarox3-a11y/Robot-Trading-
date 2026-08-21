@@ -974,11 +974,24 @@ class TradingBot:
             logger.info("  %-12s | Score=%5.1f/100 | %-10s | T=%s | RSI=%s | MTF=%s",
                         sym, ev["score"], ev["recommendation"], trend, rsi, mtf)
 
-        best = self.market_selector.select_best_market(evaluations)
+        actionable = {
+            symbol: evaluation
+            for symbol, evaluation in evaluations.items()
+            if evaluation.get("signal") in ("BUY", "SELL")
+            and (
+                not self.mtf.enabled
+                or evaluation.get("mtf", {}).get("confirmed", False)
+            )
+        }
+        if not actionable:
+            logger.info("[%s] Aucun signal BUY/SELL confirme pour ce cycle.", broker_label)
+            return
+
+        best = self.market_selector.select_best_market(actionable)
         if best is None:
             return
 
-        self._execute_trade_on_best(bkr_name, best, evaluations[best])
+        self._execute_trade_on_best(bkr_name, best, actionable[best])
 
     def _evaluate_market(self, bkr_name: str, symbol: str) -> Optional[Dict]:
         connector = self.connectors[bkr_name]
@@ -1000,6 +1013,7 @@ class TradingBot:
         current_price = prices[1]
         evaluation = self.market_selector.evaluate_market(symbol, analysis, latest, current_price)
         signal_result = strategy.generate_signal(latest, current_price)
+        evaluation["signal"] = signal_result["signal"]
         if signal_result["signal"] != "HOLD" and self.mtf.enabled:
             mtf_result = self.mtf.analyze(connector, symbol, analysis, latest, signal_result["signal"])
             evaluation["mtf"] = mtf_result
