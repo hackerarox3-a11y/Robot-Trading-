@@ -10,7 +10,7 @@ py -m venv .venv
 py -m pip install -r requirements.txt
 ```
 
-Copier `.env.example` vers `.env` puis définir les variables nécessaires dans l'environnement Windows. Ne jamais remettre de token ou de mot de passe dans `config.json`.
+Copier `.env.example` vers `.env`, renseigner les variables nécessaires, puis garder Telegram activé dans `config.json`. Le programme charge automatiquement `.env`; ne jamais remettre de token ou de mot de passe dans `config.json`.
 
 ## Vérification
 

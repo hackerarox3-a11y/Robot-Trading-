@@ -137,12 +137,35 @@ class TelegramCommandBot:
             logger.info("Commandes Telegram: token non configure.")
             self.enabled = False
             return
+        if not self._validate_token():
+            self.enabled = False
+            return
         self._running = True
         self._session_start = datetime.now()
         self._session_end = None
         self._thread = threading.Thread(target=self._poll_loop, daemon=True, name="TG-CmdBot")
         self._thread.start()
         logger.info("Serveur de commandes Telegram demarre.")
+
+    def _validate_token(self) -> bool:
+        """Verifie le token via Telegram avant de lancer le polling."""
+        url = f"{self.TELEGRAM_API.format(token=self.token)}/getMe"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            if data.get("ok"):
+                bot = data.get("result", {})
+                logger.info("Token Telegram valide: @%s", bot.get("username", "inconnu"))
+                return True
+            description = data.get("description", "reponse Telegram invalide")
+            logger.error("Token Telegram invalide: %s", description)
+        except urllib.error.HTTPError as error:
+            logger.error("Token Telegram invalide (HTTP %s). Verifie TELEGRAM_BOT_TOKEN.", error.code)
+        except (urllib.error.URLError, TimeoutError) as error:
+            logger.error("Telegram inaccessible pendant la validation du token: %s", error)
+        except (ValueError, KeyError) as error:
+            logger.error("Reponse Telegram inattendue pendant la validation: %s", error)
+        return False
 
     def stop(self):
         """Arrete le listener."""

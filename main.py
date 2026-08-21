@@ -57,6 +57,14 @@ from telegram_notifier import TelegramNotifier
 from telegram_bot import TelegramCommandBot
 from deriv_connector import DerivConnector, ORDER_TYPE_BUY as DERIV_BUY, ORDER_TYPE_SELL as DERIV_SELL
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    logging.getLogger(__name__).warning(
+        "python-dotenv non installe: le fichier .env ne sera pas charge."
+    )
+
 # MT5 est optionnel (seulement sur Windows avec MetaTrader 5 installe)
 try:
     from mt5_connector import MT5Connector, ORDER_TYPE_BUY as MT5_BUY, ORDER_TYPE_SELL as MT5_SELL

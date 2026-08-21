@@ -16,6 +16,12 @@ except ImportError:
     print("Fais: pip install websockets")
     sys.exit(1)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 async def test_connection():
     print("=" * 50)
