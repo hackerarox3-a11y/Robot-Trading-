@@ -1099,23 +1099,30 @@ class TradingBot:
             return
         news_lot_mult = self.news_filter.get_lot_multiplier(symbol)
 
-        # Calculer la mise
+        # Calculer un volume MT5 base sur le risque reel, pas une mise en USD.
         balance = rm.balance
-        cm = self.compound_managers.get(bkr_name)
-        if cm:
-            lot = cm.calculate_stake(balance, confidence)
-        else:
-            lot = self.config["trading"]["default_lot_size"]
-        lot = lot * mtf_lot_mult * news_lot_mult
-        lot_step = self.config["trading"].get("lot_step", 0.35)
-        lot = max(lot_step, round(lot / lot_step) * lot_step)
         profile = self._get_symbol_profile(symbol)
-        max_lot = profile.get("max_lot", self.config["trading"]["max_lot_size"])
-        lot = min(lot, max_lot)
+        sl_pips = profile.get(
+            "default_sl_pips",
+            self.config.get("stop_loss_take_profit", {}).get("default_stop_loss_pips", 50),
+        )
+        pip_value = profile.get("pip_value_per_lot", 10.0)
+        lot = rm.calculate_lot_size(sl_pips, pip_value)
+        lot *= mtf_lot_mult * news_lot_mult
 
-        logger.info("** [%s] TRADE %s | %s | Score=%s | MTF=%s | News x%s | Confiance=%s%% | Mise=%s$ **",
+        symbol_info = connector.get_symbol_info(symbol) or {}
+        min_lot = symbol_info.get("min_lot", self.config["trading"].get("min_lot_size", 0.01))
+        max_lot = min(
+            profile.get("max_lot", self.config["trading"]["max_lot_size"]),
+            symbol_info.get("max_lot", self.config["trading"]["max_lot_size"]),
+        )
+        lot_step = symbol_info.get("lot_step", self.config["trading"].get("lot_step", 0.01))
+        lot = max(min_lot, min(max_lot, round(lot / lot_step) * lot_step))
+
+        logger.info("** [%s] TRADE %s | %s | Score=%s | MTF=%s | News x%s | Confiance=%s%% | Volume=%s lots | Risque cible=%s$ **",
                     broker_label, symbol, signal, market_eval["score"],
-                    mtf_confluence, news_lot_mult, confidence, lot)
+                    mtf_confluence, news_lot_mult, confidence, lot,
+                    round(balance * rm.max_risk_pct / 100.0, 2))
 
         order_types = ORDER_TYPES.get(bkr_name, ORDER_TYPES["deriv"])
         order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
@@ -1127,10 +1134,6 @@ class TradingBot:
         symbol_info = connector.get_symbol_info(symbol) or {}
         digits = symbol_info.get("digits", 5)
         entry_price = prices[1] if signal == "BUY" else prices[0]
-        sl_pips = profile.get(
-            "default_sl_pips",
-            self.config.get("stop_loss_take_profit", {}).get("default_stop_loss_pips", 50),
-        )
         tp_pips = profile.get(
             "default_tp_pips",
             self.config.get("stop_loss_take_profit", {}).get("default_take_profit_pips", 80),
