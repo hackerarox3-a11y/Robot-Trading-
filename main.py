@@ -623,60 +623,49 @@ class TradingBot:
         # du bot meme si une connexion broker echoue.
         self.cmd_bot.start()
 
-        # Connexion des brokers avec degradation gracieuse
-        if not self.dry_run:
-            for bkr_name, connector in list(self.connectors.items()):
-                broker_lbl = "Deriv" if bkr_name == "deriv" else "Exness (MT5)"
-                is_active = bkr_name in self._get_active_brokers()
-                logger.info("Connexion a %s %s...", broker_lbl, "(ACTIF)" if is_active else "(en standby)")
-                try:
-                    start_t = time.time()
-                    if connector.connect():
-                        latency = (time.time() - start_t) * 1000
-                        self._record_request_metric(bkr_name, True, latency)
-                        account = connector.get_account_info()
-                        if account:
-                            self.risk_managers[bkr_name] = RiskManager(self.config, account)
-                            self.compound_managers[bkr_name] = CompoundManager(self.config)
-                            self.compound_managers[bkr_name].initialize(account.get("balance", 5))
-                            lvl = self.compound_managers[bkr_name].get_current_level(account.get("balance", 5))
-                            logger.info("  %s OK | Capital: %s$ | %s", broker_lbl, account.get("balance", 0), lvl["current"]["label"])
-                            self.telegram.notify_connection_status(broker_lbl, True)
-                    else:
-                        self._record_request_metric(bkr_name, False)
-                        logger.error("  %s : connexion echouee.", broker_lbl)
-                        self.telegram.notify_connection_status(broker_lbl, False)
-                        # Degradation gracieuse: retirer le broker mais continuer
-                        del self.connectors[bkr_name]
-                        logger.info("  Degradation gracieuse: %s retire. Continuite assuree.", broker_lbl)
-                except Exception as e:
+        # Connexion des brokers avec degradation gracieuse. Le dry-run se
+        # connecte aussi pour analyser les vrais cours, sans envoyer d'ordres.
+        for bkr_name, connector in list(self.connectors.items()):
+            broker_lbl = "Deriv" if bkr_name == "deriv" else "Exness (MT5)"
+            is_active = bkr_name in self._get_active_brokers()
+            if not is_active:
+                continue
+            logger.info("Connexion a %s (simulation=%s)...", broker_lbl, self.dry_run)
+            try:
+                start_t = time.time()
+                if connector.connect():
+                    latency = (time.time() - start_t) * 1000
+                    self._record_request_metric(bkr_name, True, latency)
+                    account = connector.get_account_info() or {
+                        "balance": 5, "equity": 5, "currency": "USD"
+                    }
+                    self.risk_managers[bkr_name] = RiskManager(self.config, account)
+                    self.compound_managers[bkr_name] = CompoundManager(self.config)
+                    self.compound_managers[bkr_name].initialize(account.get("balance", 5))
+                    logger.info("  %s OK | Donnees de marche disponibles", broker_lbl)
+                else:
                     self._record_request_metric(bkr_name, False)
-                    logger.error("  %s : erreur de connexion - %s", broker_lbl, e)
-                    self.telegram.notify_connection_status(broker_lbl, False)
-                    if bkr_name in self.connectors:
-                        del self.connectors[bkr_name]
-                    logger.info("  Degradation gracieuse: %s retire apres erreur.", broker_lbl)
-            
-            if not self.connectors:
-                logger.error("Aucun broker connecte. Arret.")
-                self.telegram.notify_error("Aucun broker connecte!")
-                return
-            
-            # Ajuster le mode si un broker a echoue
-            if self.active_broker == "both" and len(self.connectors) == 1:
-                self.active_broker = list(self.connectors.keys())[0]
-                logger.info("Mode ajuste a : %s (un seul broker disponible)", self.active_broker)
-                self.telegram.notify_mode_change("switch_broker", "Ajustement automatique vers %s (degradation gracieuse)" % self.active_broker)
+                    logger.error("  %s : connexion echouee.", broker_lbl)
+                    del self.connectors[bkr_name]
+            except Exception as e:
+                self._record_request_metric(bkr_name, False)
+                logger.error("  %s : erreur de connexion - %s", broker_lbl, e)
+                del self.connectors[bkr_name]
 
-            # Calculer le solde initial pour l'arret d'urgence
-            self._initial_total_balance = sum(
-                rm.balance for rm in self.risk_managers.values()
-            )
-        else:
-            logger.info("Mode simulation - aucun ordre reel.")
-            self.risk_managers["deriv"] = RiskManager(self.config, {"balance": 5, "equity": 5, "currency": "USD"})
-            self.compound_managers["deriv"] = CompoundManager(self.config)
-            self.compound_managers["deriv"].initialize(5)
+        if not self.connectors:
+            logger.error("Aucun broker connecte. Verifie les credentials et la connexion internet.")
+            return
+
+        # Ajuster le mode si un seul broker reste disponible.
+        if self.active_broker == "both" and len(self.connectors) == 1:
+            self.active_broker = list(self.connectors.keys())[0]
+            logger.info("Mode ajuste a : %s (un seul broker disponible)", self.active_broker)
+
+        self._initial_total_balance = sum(
+            rm.balance for rm in self.risk_managers.values()
+        )
+        if self.dry_run:
+            logger.info("Mode simulation - aucun ordre reel, analyse des vrais cours.")
 
         self.cmd_bot.notify_startup(self.active_broker)
 
@@ -980,8 +969,6 @@ class TradingBot:
 
     def _evaluate_market(self, bkr_name: str, symbol: str) -> Optional[Dict]:
         connector = self.connectors[bkr_name]
-        if self.dry_run:
-            return {"score": 50, "recommendation": "BON", "breakdown": {}}
         start_t = time.time()
         ohlc = connector.get_ohlc_data(symbol)
         lat = (time.time() - start_t) * 1000
