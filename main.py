@@ -619,6 +619,10 @@ class TradingBot:
         logger.info("  Arret d'urgence : %+.2f$", self._emergency_loss_threshold)
         logger.info("=" * 60)
 
+        # Demarrer Telegram avant les brokers pour garder le controle
+        # du bot meme si une connexion broker echoue.
+        self.cmd_bot.start()
+
         # Connexion des brokers avec degradation gracieuse
         if not self.dry_run:
             for bkr_name, connector in list(self.connectors.items()):
@@ -674,8 +678,6 @@ class TradingBot:
             self.compound_managers["deriv"] = CompoundManager(self.config)
             self.compound_managers["deriv"].initialize(5)
 
-        # Demarrer le bot de commandes Telegram
-        self.cmd_bot.start()
         self.cmd_bot.notify_startup(self.active_broker)
 
         # Demarrer le thread de sante
