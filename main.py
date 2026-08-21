@@ -1209,21 +1209,7 @@ class TradingBot:
         if not self._is_trading_session():
             return
 
-        # Mode dry-run ameliore
-        if self.dry_run:
-            logger.info("[DRY-RUN] Analyse de %s...", symbol)
-            import random
-            simulated_pnl = random.uniform(-1.5, 2.5)
-            self._dry_run_pnl += simulated_pnl
-            self._dry_run_trades.append({
-                "symbol": symbol, "pnl": simulated_pnl,
-                "time": datetime.now().isoformat()
-            })
-            if len(self._dry_run_trades) > 100:
-                self._dry_run_trades = self._dry_run_trades[-100:]
-            return
-
-        if connector.get_positions_by_symbol(symbol):
+        if not self.dry_run and connector.get_positions_by_symbol(symbol):
             return
         can_trade, reason = rm.can_open_position(current_pos_count)
         if not can_trade:
@@ -1267,6 +1253,32 @@ class TradingBot:
         lot = lot * mtf_lot_mult * news_lot_mult
         order_types = ORDER_TYPES.get(bkr_name, ORDER_TYPES["deriv"])
         order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
+
+        if self.dry_run:
+            import random
+            simulated_pnl = random.uniform(-1.5, 2.5)
+            self._dry_run_pnl += simulated_pnl
+            self._dry_run_trades.append({
+                "broker": bkr_name, "symbol": symbol, "direction": signal,
+                "confidence": signal_result["confidence"], "pnl": simulated_pnl,
+                "time": datetime.now().isoformat()
+            })
+            if len(self._dry_run_trades) > 100:
+                self._dry_run_trades = self._dry_run_trades[-100:]
+            logger.info(
+                "[DRY-RUN][%s] %s %s | confiance=%s | lot=%.2f | PnL simule=%+.2f",
+                bkr_name.upper(), signal, symbol, signal_result["confidence"], lot, simulated_pnl
+            )
+            self.telegram.notify_trade_open(
+                "[DRY-RUN][%s] %s" % (bkr_name.upper(), symbol),
+                signal, lot, signal_result["confidence"]
+            )
+            self.telegram.notify_info(
+                "[DRY-RUN] Aucun ordre reel envoye. Signal %s %s | PnL simule: %+.2f$"
+                % (signal, symbol, simulated_pnl)
+            )
+            return
+
         result = connector.open_position(
             symbol=symbol, order_type=order_type, lot=lot, sl=0, tp=0,
             comment="BOT_%s_TF%.1f" % (signal, mtf_confluence)
