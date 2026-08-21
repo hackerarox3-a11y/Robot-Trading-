@@ -1121,10 +1121,31 @@ class TradingBot:
         order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
         comment = "BOT_%s_%s%%_M%s_TF%s" % (signal, confidence, market_eval["score"], mtf_confluence)
 
+        # MT5 refuse les ordres avec SL/TP a zero. Calculer des niveaux
+        # proteges a partir du profil du symbole avant l'envoi.
+        pip_size = connector.get_pip_size(symbol)
+        symbol_info = connector.get_symbol_info(symbol) or {}
+        digits = symbol_info.get("digits", 5)
+        entry_price = prices[1] if signal == "BUY" else prices[0]
+        sl_pips = profile.get(
+            "default_sl_pips",
+            self.config.get("stop_loss_take_profit", {}).get("default_stop_loss_pips", 50),
+        )
+        tp_pips = profile.get(
+            "default_tp_pips",
+            self.config.get("stop_loss_take_profit", {}).get("default_take_profit_pips", 80),
+        )
+        if signal == "BUY":
+            sl = round(entry_price - sl_pips * pip_size, digits)
+            tp = round(entry_price + tp_pips * pip_size, digits)
+        else:
+            sl = round(entry_price + sl_pips * pip_size, digits)
+            tp = round(entry_price - tp_pips * pip_size, digits)
+
         start_t = time.time()
         result = connector.open_position(
             symbol=symbol, order_type=order_type,
-            lot=lot, sl=0, tp=0, comment=comment,
+            lot=lot, sl=sl, tp=tp, comment=comment,
         )
         lat = (time.time() - start_t) * 1000
 
@@ -1132,7 +1153,7 @@ class TradingBot:
             self._record_request_metric(bkr_name, True, lat)
             self._log_trade_csv({
                 "broker": bkr_name, "symbol": symbol, "direction": signal, "lot": lot,
-                "entry_price": result["price"], "sl": 0, "tp": 0,
+                "entry_price": result["price"], "sl": sl, "tp": tp,
                 "score": signal_result["total_score"],
                 "confidence": confidence, "market_score": market_eval["score"],
                 "mtf_confluence": mtf_confluence, "news_filtered": "no",
