@@ -113,9 +113,12 @@ class TradingBot:
     """Robot de trading multi-broker avec controle Telegram avance."""
 
     def __init__(self, config_path: str, dry_run: bool = False, broker: str = None,
-                 demo_only: bool = False):
+                 demo_only: bool = False, demo_live: bool = False):
+        if demo_only and demo_live:
+            raise ValueError("demo_only et demo_live sont incompatibles")
         self.dry_run = dry_run or demo_only
         self.demo_only = demo_only
+        self.demo_live = demo_live
         self.config_path = config_path
         self.config = self._load_config(config_path)
         self.config["_path"] = config_path
@@ -641,7 +644,7 @@ class TradingBot:
                     account = connector.get_account_info() or {
                         "balance": 5, "equity": 5, "currency": "USD"
                     }
-                    if self.demo_only and (
+                    if (self.demo_only or self.demo_live) and (
                         bkr_name != "mt5" or not account.get("is_demo", False)
                     ):
                         logger.error("Compte non-demo detecte ou statut indisponible. Arret preventif.")
@@ -1801,6 +1804,10 @@ def main():
         "--demo-only", action="store_true",
         help="Force MT5 demo uniquement, sans aucun ordre reel",
     )
+    parser.add_argument(
+        "--demo-live", action="store_true",
+        help="Force MT5 demo et autorise les ordres sur le compte demo",
+    )
     parser.add_argument("--broker", type=str, default=None, choices=["mt5", "deriv", "both"])
     parser.add_argument("--backtest", action="store_true", help="Lance le backtest")
     parser.add_argument("--symbol", type=str, default=None, help="Symbole a backtester")
@@ -1821,14 +1828,17 @@ def main():
         bt.run(symbols=symbols, days=args.days, show_trades=args.show_trades,
                report_type=args.report)
     else:
-        if args.demo_only and args.broker not in (None, "mt5"):
-            parser.error("--demo-only est incompatible avec --broker deriv/both")
-        broker = "mt5" if args.demo_only else args.broker
+        if (args.demo_only or args.demo_live) and args.broker not in (None, "mt5"):
+            parser.error("Le mode demo est incompatible avec --broker deriv/both")
+        if args.demo_only and args.demo_live:
+            parser.error("--demo-only et --demo-live sont incompatibles")
+        broker = "mt5" if (args.demo_only or args.demo_live) else args.broker
         bot = TradingBot(
             config_path=args.config,
             dry_run=args.dry_run,
             broker=broker,
             demo_only=args.demo_only,
+            demo_live=args.demo_live,
         )
         bot.start()
 
