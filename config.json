@@ -9,7 +9,7 @@
     },
     "mt5": {
       "enabled": true,
-      "symbols": ["XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF"]
+      "symbols": ["XAUUSDm", "EURUSDm", "GBPUSDm", "USDJPYm", "USDCHFm"]
     }
   },
 

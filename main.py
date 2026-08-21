@@ -1029,6 +1029,11 @@ class TradingBot:
             })
             if len(self._dry_run_trades) > 100:
                 self._dry_run_trades = self._dry_run_trades[-100:]
+            self.telegram.notify_info(
+                "[DRY-RUN][%s] Position simulee sur %s | score=%s | PnL simule=%+.2f$\n"
+                "Aucun ordre reel envoye."
+                % (broker_label, symbol, market_eval["score"], simulated_pnl)
+            )
             return
 
         if connector.get_positions_by_symbol(symbol):
