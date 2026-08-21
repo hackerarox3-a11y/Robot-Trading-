@@ -83,7 +83,7 @@ class DerivConnector:
         self.api_token: str = os.getenv("DERIV_API_TOKEN", deriv_cfg.get("api_token", ""))
         self.ws_url: str = deriv_cfg.get("ws_url", "wss://ws.derivws.com/websockets/v3")
         self.symbols: List[str] = config.get("brokers", {}).get("deriv", {}).get(
-            "symbols", config["trading"]["symbols"]
+            "symbols", trading_cfg["symbols"]
         )
         self.timeframe_str: str = trading_cfg["timeframe"]
         self.timeframe_seconds: int = TIMEFRAME_MAP.get(self.timeframe_str, 900)

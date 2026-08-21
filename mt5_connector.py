@@ -7,7 +7,6 @@ de sante et logique de reprises pour les ordres.
 
 import time
 import logging
-import os
 import MetaTrader5 as mt5
 import numpy as np
 import pandas as pd
@@ -65,9 +64,9 @@ class MT5Connector:
         mt5_cfg = config["mt5"]
         trading_cfg = config["trading"]
 
-        self.login: int = int(os.getenv("MT5_LOGIN", mt5_cfg.get("login", 0)))
-        self.password: str = os.getenv("MT5_PASSWORD", mt5_cfg.get("password", ""))
-        self.server: str = os.getenv("MT5_SERVER", mt5_cfg.get("server", ""))
+        self.login: int = mt5_cfg["login"]
+        self.password: str = mt5_cfg["password"]
+        self.server: str = mt5_cfg["server"]
         self.mt5_path: str = mt5_cfg["path"]
         self.symbols: List[str] = config.get("brokers", {}).get("mt5", {}).get(
             "symbols", trading_cfg["symbols"]
@@ -260,8 +259,6 @@ class MT5Connector:
             "server": info.server,
             "leverage": info.leverage,
             "profit": info.profit,
-            "trade_mode": info.trade_mode,
-            "is_demo": info.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO,
         }
 
     # ------------------------------------------------------------------

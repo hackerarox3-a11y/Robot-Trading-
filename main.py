@@ -196,6 +196,10 @@ class TradingBot:
 
         # --- v4: Etat pour sauvegarde ---
         self._state_file = ".bot_state.json"
+        saved_state = self._load_state()
+        self._processed_deal_tickets = set(
+            str(ticket) for ticket in saved_state.get("processed_deal_tickets", [])
+        )
         self._last_auto_save = time.time()
         self._auto_save_interval = 300  # 5 minutes
 
@@ -446,6 +450,7 @@ class TradingBot:
                 "worst_streak": self.telegram._worst_streak,
                 "dry_run_trades": self._dry_run_trades[-20:],
                 "dry_run_pnl": self._dry_run_pnl,
+                "processed_deal_tickets": sorted(self._processed_deal_tickets)[-1000:],
             }
             with open(self._state_file, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
@@ -1221,8 +1226,10 @@ class TradingBot:
         snapshot = self._positions_snapshots[snap_key]
         for deal in deals:
             ticket = deal["ticket"]
-            if ticket not in snapshot:
+            deal_key = "%s:%s" % (bkr_name, ticket)
+            if ticket not in snapshot and deal_key not in self._processed_deal_tickets:
                 snapshot[ticket] = True
+                self._processed_deal_tickets.add(deal_key)
                 pnl = deal["profit"]
                 if rm:
                     rm.record_trade(pnl)
