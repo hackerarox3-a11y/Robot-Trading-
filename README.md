@@ -31,6 +31,7 @@ py test_deriv.py
 ```powershell
 py main.py --dry-run --broker deriv
 py main.py --broker mt5
+py main.py --demo-only
 ```
 
-Le compte réel et les accès API doivent être vérifiés avant tout démarrage sans `--dry-run`.
+`--demo-only` force MT5, vérifie que le compte connecté est un compte démo et interdit toute ouverture de position. Le compte réel et les accès API doivent être vérifiés avant tout démarrage sans `--dry-run`.

@@ -260,6 +260,8 @@ class MT5Connector:
             "server": info.server,
             "leverage": info.leverage,
             "profit": info.profit,
+            "trade_mode": info.trade_mode,
+            "is_demo": info.trade_mode == mt5.ACCOUNT_TRADE_MODE_DEMO,
         }
 
     # ------------------------------------------------------------------

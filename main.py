@@ -112,8 +112,10 @@ def deep_merge(base: dict, override: dict) -> dict:
 class TradingBot:
     """Robot de trading multi-broker avec controle Telegram avance."""
 
-    def __init__(self, config_path: str, dry_run: bool = False, broker: str = None):
-        self.dry_run = dry_run
+    def __init__(self, config_path: str, dry_run: bool = False, broker: str = None,
+                 demo_only: bool = False):
+        self.dry_run = dry_run or demo_only
+        self.demo_only = demo_only
         self.config_path = config_path
         self.config = self._load_config(config_path)
         self.config["_path"] = config_path
@@ -343,7 +345,7 @@ class TradingBot:
         elif self.active_broker in self.connectors:
             return [self.active_broker]
         else:
-            return list(self.connectors.keys())
+            return []
 
     # ==================================================================
     #  DIAGNOSTICS DE DEMARRAGE
@@ -639,6 +641,13 @@ class TradingBot:
                     account = connector.get_account_info() or {
                         "balance": 5, "equity": 5, "currency": "USD"
                     }
+                    if self.demo_only and (
+                        bkr_name != "mt5" or not account.get("is_demo", False)
+                    ):
+                        logger.error("Compte non-demo detecte ou statut indisponible. Arret preventif.")
+                        connector.disconnect()
+                        del self.connectors[bkr_name]
+                        continue
                     self.risk_managers[bkr_name] = RiskManager(self.config, account)
                     self.compound_managers[bkr_name] = CompoundManager(self.config)
                     self.compound_managers[bkr_name].initialize(account.get("balance", 5))
@@ -652,8 +661,9 @@ class TradingBot:
                 logger.error("  %s : erreur de connexion - %s", broker_lbl, e)
                 del self.connectors[bkr_name]
 
-        if not self.connectors:
+        if not self._get_active_brokers():
             logger.error("Aucun broker connecte. Verifie les credentials et la connexion internet.")
+            self.cmd_bot.stop()
             return
 
         # Ajuster le mode si un seul broker reste disponible.
@@ -1782,6 +1792,10 @@ def main():
     parser = argparse.ArgumentParser(description="Robot Trading v4 - Multi-Broker + Controle Telegram Avance")
     parser.add_argument("--config", type=str, default="config.json")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--demo-only", action="store_true",
+        help="Force MT5 demo uniquement, sans aucun ordre reel",
+    )
     parser.add_argument("--broker", type=str, default=None, choices=["mt5", "deriv", "both"])
     parser.add_argument("--backtest", action="store_true", help="Lance le backtest")
     parser.add_argument("--symbol", type=str, default=None, help="Symbole a backtester")
@@ -1802,7 +1816,15 @@ def main():
         bt.run(symbols=symbols, days=args.days, show_trades=args.show_trades,
                report_type=args.report)
     else:
-        bot = TradingBot(config_path=args.config, dry_run=args.dry_run, broker=args.broker)
+        if args.demo_only and args.broker not in (None, "mt5"):
+            parser.error("--demo-only est incompatible avec --broker deriv/both")
+        broker = "mt5" if args.demo_only else args.broker
+        bot = TradingBot(
+            config_path=args.config,
+            dry_run=args.dry_run,
+            broker=broker,
+            demo_only=args.demo_only,
+        )
         bot.start()
 
 
