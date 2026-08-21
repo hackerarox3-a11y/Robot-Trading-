@@ -236,6 +236,7 @@
     "max_risk_per_trade_pct": 1.0,
     "max_daily_loss_pct": 3.0,
     "max_daily_trades": 12,
+    "max_consecutive_losses": 3,
     "use_trailing_stop": true,
     "trailing_stop_pips": 30,
     "trailing_step_pips": 10,
