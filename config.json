@@ -277,8 +277,8 @@
     "macd_crossover": 0.20,
     "bollinger_bounce": 0.15,
     "adx_filter": 0.10,
-    "buy_threshold": 0.60,
-    "sell_threshold": -0.60
+    "buy_threshold": 0.45,
+    "sell_threshold": -0.45
   },
 
   "timing": {
