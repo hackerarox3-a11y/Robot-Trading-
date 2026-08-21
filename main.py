@@ -123,6 +123,8 @@ class TradingBot:
         self.config = self._load_config(config_path)
         self.config["_path"] = config_path
         self.config["_dry_run"] = dry_run
+        if demo_live:
+            self.config.setdefault("multi_timeframe", {})["mode"] = "soft"
         self.running = False
         self.paused = False
         self.scan_interval = self.config["timing"]["scan_interval_seconds"]
@@ -618,6 +620,8 @@ class TradingBot:
         logger.info("  Brokers actifs : %s", broker_label)
         logger.info("  Selection auto marche : %s", "ON" if self.auto_select else "OFF")
         logger.info("  Multi-Timeframe : %s (%s)", "ON" if self.mtf.enabled else "OFF", self.mtf.mode)
+        if self.demo_live:
+            logger.warning("  DEMO-LIVE : signaux directionnels autorises avec confirmation MTF faible et mise reduite")
         logger.info("  Filtre News : %s (%s)", "ON" if self.news_filter.enabled else "OFF", self.news_filter.mode)
         logger.info("  Telegram : %s", "ON" if self.telegram.enabled else "OFF")
         logger.info("  Commandes Telegram : %s", "ON" if self.cmd_bot.enabled else "OFF")
