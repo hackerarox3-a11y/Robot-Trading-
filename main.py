@@ -43,6 +43,8 @@ import sys
 import copy
 import threading
 import traceback
+import random
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -95,7 +97,15 @@ def setup_logging(config: dict):
     handlers = [logging.StreamHandler()]
     if log_cfg.get("log_to_file", True):
         log_file = log_cfg.get("log_file", "trading_bot.log")
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        # Rotation du fichier de log pour eviter une croissance infinie
+        max_bytes = int(log_cfg.get("log_max_bytes", 10 * 1024 * 1024))
+        backup_count = int(log_cfg.get("log_backup_count", 3))
+        if backup_count <= 0:
+            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        else:
+            handlers.append(
+                RotatingFileHandler(log_file, encoding="utf-8", maxBytes=max_bytes, backupCount=backup_count)
+            )
     logging.basicConfig(level=log_level, format=log_format, datefmt=date_format, handlers=handlers)
 
 
@@ -107,6 +117,26 @@ def deep_merge(base: dict, override: dict) -> dict:
         else:
             result[k] = copy.deepcopy(v)
     return result
+
+
+def normalize_lot(lot: float, min_lot: float, max_lot: float, lot_step: float) -> float:
+    """
+    Arrondit un volume au pas du symbole puis le borne entre min/max.
+    Protege contre les valeurs invalides (lot_step <= 0 -> fallback sur min_lot).
+    """
+    try:
+        step = float(lot_step)
+    except (TypeError, ValueError):
+        step = 0.0
+    if step <= 0:
+        step = float(min_lot) if min_lot and float(min_lot) > 0 else 0.01
+    try:
+        lo = max(0.0, float(min_lot))
+        hi = float(max_lot)
+    except (TypeError, ValueError):
+        lo, hi = 0.0, max(step, 0.01)
+    rounded = round(float(lot) / step) * step
+    return max(lo, min(hi, rounded))
 
 
 class TradingBot:
@@ -217,6 +247,8 @@ class TradingBot:
         # --- v4: Thread de sante ---
         self._health_thread = None
         self._health_running = False
+        # Derniere qualite notifiee par broker : (taux, latence_ms, erreurs)
+        self._last_quality_notify: Dict[str, tuple] = {}
 
         # --- v4: Compteur dry-run ---
         self._dry_run_trades = []
@@ -452,8 +484,13 @@ class TradingBot:
                 "dry_run_pnl": self._dry_run_pnl,
                 "processed_deal_tickets": sorted(self._processed_deal_tickets)[-1000:],
             }
-            with open(self._state_file, "w", encoding="utf-8") as f:
+            tmp_path = self._state_file + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            # Remplacement atomique : jamais d'etat partiellement ecrit
+            os.replace(tmp_path, self._state_file)
             logger.debug("Etat sauvegarde.")
         except Exception as e:
             logger.debug("Sauvegarde etat echouee: %s", e)
@@ -517,10 +554,31 @@ class TradingBot:
                 success_rate = (metrics["success_count"] / metrics["total_requests"]) * 100
                 avg_latency = metrics["total_latency_ms"] / metrics["success_count"] if metrics["success_count"] > 0 else 0
 
-                # Notifier si la qualite est mauvaise
-                self.telegram.notify_connection_quality(
-                    broker_label, avg_latency, success_rate, metrics["error_count"]
-                )
+                # Notifier seulement si la qualite evolue significativement
+                # (evite de spammer Telegram toutes les 60 secondes)
+                last = self._last_quality_notify.get(bkr_name)
+                degraded = success_rate < 70 or avg_latency > 3000
+                if last is None:
+                    should_notify = degraded
+                else:
+                    prev_rate, prev_lat, prev_err = last
+                    if prev_lat <= 0:
+                        lat_changed = avg_latency > 0
+                    elif avg_latency <= 0:
+                        lat_changed = False
+                    else:
+                        lat_changed = abs(avg_latency - prev_lat) / prev_lat >= 0.30
+                    should_notify = (
+                        abs(success_rate - prev_rate) >= 10
+                        or lat_changed
+                        or metrics["error_count"] != prev_err
+                        or (degraded and (prev_rate >= 70 and prev_lat <= 3000))
+                    )
+                if should_notify:
+                    self.telegram.notify_connection_quality(
+                        broker_label, avg_latency, success_rate, metrics["error_count"]
+                    )
+                    self._last_quality_notify[bkr_name] = (success_rate, avg_latency, metrics["error_count"])
 
                 if success_rate < 70:
                     issues.append("%s: taux de succes %.0f%%" % (broker_label, success_rate))
@@ -744,8 +802,11 @@ class TradingBot:
         self.cmd_bot.notify_shutdown()
         # Arreter le command bot
         self.cmd_bot.stop()
-        # Fermer toutes les positions sur tous les brokers
-        if not self.dry_run:
+        # Fermer toutes les positions sur tous les brokers (option configurable)
+        close_on_stop = self.config.get("trading", {}).get(
+            "close_positions_on_stop", True
+        )
+        if not self.dry_run and close_on_stop:
             total_closed = 0
             for bkr_name, connector in self.connectors.items():
                 try:
@@ -1046,7 +1107,6 @@ class TradingBot:
             logger.info("[DRY-RUN][%s] Meilleur marche : %s (score=%s%s)",
                         broker_label, symbol, market_eval["score"], mtf_info)
             # Simuler un resultat
-            import random
             simulated_pnl = random.uniform(-2, 3) * (market_eval["score"] / 100)
             self._dry_run_pnl += simulated_pnl
             self._dry_run_trades.append({
@@ -1122,7 +1182,7 @@ class TradingBot:
             symbol_info.get("max_lot", self.config["trading"]["max_lot_size"]),
         )
         lot_step = symbol_info.get("lot_step", self.config["trading"].get("lot_step", 0.01))
-        lot = max(min_lot, min(max_lot, round(lot / lot_step) * lot_step))
+        lot = normalize_lot(lot, min_lot, max_lot, lot_step)
 
         logger.info("** [%s] TRADE %s | %s | Score=%s | MTF=%s | News x%s | Confiance=%s%% | Volume=%s lots | Risque cible=%s$ **",
                     broker_label, symbol, signal, market_eval["score"],
@@ -1322,7 +1382,6 @@ class TradingBot:
         order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
 
         if self.dry_run:
-            import random
             simulated_pnl = random.uniform(-1.5, 2.5)
             self._dry_run_pnl += simulated_pnl
             self._dry_run_trades.append({
@@ -1346,14 +1405,38 @@ class TradingBot:
             )
             return
 
+        # --- Protections SL/TP --------------------------------------------
+        # MT5 refuse les ordres dont le SL/TP vaut zero, et aucune position
+        # ne doit s'ouvrir sans stop-loss calcule depuis le profil symbole.
+        profile = self._get_symbol_profile(symbol)
+        pip_size = connector.get_pip_size(symbol)
+        symbol_info = connector.get_symbol_info(symbol) or {}
+        digits = symbol_info.get("digits", 5)
+        entry_price = prices[1] if signal == "BUY" else prices[0]
+        sl_tp_cfg = self.config.get("stop_loss_take_profit", {})
+        sl_pips = profile.get(
+            "default_sl_pips",
+            sl_tp_cfg.get("default_stop_loss_pips", 50),
+        )
+        tp_pips = profile.get(
+            "default_tp_pips",
+            sl_tp_cfg.get("default_take_profit_pips", 80),
+        )
+        if signal == "BUY":
+            sl = round(entry_price - sl_pips * pip_size, digits)
+            tp = round(entry_price + tp_pips * pip_size, digits)
+        else:
+            sl = round(entry_price + sl_pips * pip_size, digits)
+            tp = round(entry_price - tp_pips * pip_size, digits)
+
         result = connector.open_position(
-            symbol=symbol, order_type=order_type, lot=lot, sl=0, tp=0,
+            symbol=symbol, order_type=order_type, lot=lot, sl=sl, tp=tp,
             comment="BOT_%s_TF%.1f" % (signal, mtf_confluence)
         )
         if result and result.get("success"):
             self._log_trade_csv({
                 "broker": bkr_name, "symbol": symbol, "direction": signal, "lot": lot,
-                "entry_price": result["price"], "sl": 0, "tp": 0,
+                "entry_price": result["price"], "sl": sl, "tp": tp,
                 "score": signal_result["total_score"],
                 "confidence": signal_result["confidence"],
                 "reason": "signal", "mtf_confluence": mtf_confluence
