@@ -304,7 +304,7 @@
 
   "auto_market_select": {
     "enabled": true,
-    "min_score_to_trade": 50
+    "min_score_to_trade": 40
   },
 
   "compound_growth": {
