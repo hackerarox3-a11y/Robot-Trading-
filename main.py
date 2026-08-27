@@ -58,6 +58,7 @@ from news_filter import NewsFilter
 from telegram_notifier import TelegramNotifier
 from telegram_bot import TelegramCommandBot
 from deriv_connector import DerivConnector, ORDER_TYPE_BUY as DERIV_BUY, ORDER_TYPE_SELL as DERIV_SELL
+from utils import normalize_lot, feasibility_lot, spread_ok, protected_sl_tp
 
 try:
     from dotenv import load_dotenv
@@ -119,24 +120,7 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def normalize_lot(lot: float, min_lot: float, max_lot: float, lot_step: float) -> float:
-    """
-    Arrondit un volume au pas du symbole puis le borne entre min/max.
-    Protege contre les valeurs invalides (lot_step <= 0 -> fallback sur min_lot).
-    """
-    try:
-        step = float(lot_step)
-    except (TypeError, ValueError):
-        step = 0.0
-    if step <= 0:
-        step = float(min_lot) if min_lot and float(min_lot) > 0 else 0.01
-    try:
-        lo = max(0.0, float(min_lot))
-        hi = float(max_lot)
-    except (TypeError, ValueError):
-        lo, hi = 0.0, max(step, 0.01)
-    rounded = round(float(lot) / step) * step
-    return max(lo, min(hi, rounded))
+# normalize_lot est exposee ci-dessous via l'import depuis utils
 
 
 class TradingBot:
@@ -253,6 +237,9 @@ class TradingBot:
         # --- v4: Compteur dry-run ---
         self._dry_run_trades = []
         self._dry_run_pnl = 0.0
+
+        # --- v5: Cache ATR recent par (broker:symbole) pour trailing dynamique ---
+        self._atr_cache: Dict[str, tuple] = {}
 
     def _load_config(self, path: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
@@ -921,6 +908,8 @@ class TradingBot:
             report = rm.get_risk_report()
             positions = connector.get_bot_positions()
             total_pnl = sum(p.get("profit", 0) for p in positions)
+            rm.set_total_exposure(
+                self._estimate_total_notional(bkr_name, positions))
             balance = report["equity"]
             cm = self.compound_managers.get(bkr_name)
             progress = cm.get_progress_message(balance) if cm else ""
@@ -1144,95 +1133,10 @@ class TradingBot:
         if signal == "HOLD":
             return
 
-        # Multi-TF confirmation
-        mtf_confluence = 0
-        mtf_lot_mult = 1.0
-        if self.mtf.enabled:
-            mtf_result = self.mtf.analyze(connector, symbol, analysis, latest, signal)
-            mtf_confluence = mtf_result["confluence_score"]
-            mtf_lot_mult = mtf_result["lot_multiplier"]
-            if not mtf_result["confirmed"]:
-                logger.info("[%s] %s: signal non confirme multi-TF.", broker_label, symbol)
-                self.telegram.notify_mtf_block("[%s] %s" % (broker_label, symbol), mtf_result["details"])
-                return
-            signal = mtf_result["signal"]
-
-        # News filter
-        safe, news_reason = self.news_filter.is_safe_to_trade(symbol)
-        if not safe:
-            logger.info("[%s] %s: trade bloque par news. (%s)", broker_label, symbol, news_reason)
-            return
-        news_lot_mult = self.news_filter.get_lot_multiplier(symbol)
-
-        # Calculer un volume MT5 base sur le risque reel, pas une mise en USD.
-        balance = rm.balance
-        profile = self._get_symbol_profile(symbol)
-        sl_pips = profile.get(
-            "default_sl_pips",
-            self.config.get("stop_loss_take_profit", {}).get("default_stop_loss_pips", 50),
-        )
-        pip_value = profile.get("pip_value_per_lot", 10.0)
-        lot = rm.calculate_lot_size(sl_pips, pip_value)
-        lot *= mtf_lot_mult * news_lot_mult
-
-        symbol_info = connector.get_symbol_info(symbol) or {}
-        min_lot = symbol_info.get("min_lot", self.config["trading"].get("min_lot_size", 0.01))
-        max_lot = min(
-            profile.get("max_lot", self.config["trading"]["max_lot_size"]),
-            symbol_info.get("max_lot", self.config["trading"]["max_lot_size"]),
-        )
-        lot_step = symbol_info.get("lot_step", self.config["trading"].get("lot_step", 0.01))
-        lot = normalize_lot(lot, min_lot, max_lot, lot_step)
-
-        logger.info("** [%s] TRADE %s | %s | Score=%s | MTF=%s | News x%s | Confiance=%s%% | Volume=%s lots | Risque cible=%s$ **",
-                    broker_label, symbol, signal, market_eval["score"],
-                    mtf_confluence, news_lot_mult, confidence, lot,
-                    round(balance * rm.max_risk_pct / 100.0, 2))
-
-        order_types = ORDER_TYPES.get(bkr_name, ORDER_TYPES["deriv"])
-        order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
-        comment = "BOT_%s_%s%%_M%s_TF%s" % (signal, confidence, market_eval["score"], mtf_confluence)
-
-        # MT5 refuse les ordres avec SL/TP a zero. Calculer des niveaux
-        # proteges a partir du profil du symbole avant l'envoi.
-        pip_size = connector.get_pip_size(symbol)
-        symbol_info = connector.get_symbol_info(symbol) or {}
-        digits = symbol_info.get("digits", 5)
-        entry_price = prices[1] if signal == "BUY" else prices[0]
-        tp_pips = profile.get(
-            "default_tp_pips",
-            self.config.get("stop_loss_take_profit", {}).get("default_take_profit_pips", 80),
-        )
-        if signal == "BUY":
-            sl = round(entry_price - sl_pips * pip_size, digits)
-            tp = round(entry_price + tp_pips * pip_size, digits)
-        else:
-            sl = round(entry_price + sl_pips * pip_size, digits)
-            tp = round(entry_price - tp_pips * pip_size, digits)
-
-        start_t = time.time()
-        result = connector.open_position(
-            symbol=symbol, order_type=order_type,
-            lot=lot, sl=sl, tp=tp, comment=comment,
-        )
-        lat = (time.time() - start_t) * 1000
-
-        if result and result.get("success"):
-            self._record_request_metric(bkr_name, True, lat)
-            self._log_trade_csv({
-                "broker": bkr_name, "symbol": symbol, "direction": signal, "lot": lot,
-                "entry_price": result["price"], "sl": sl, "tp": tp,
-                "score": signal_result["total_score"],
-                "confidence": confidence, "market_score": market_eval["score"],
-                "mtf_confluence": mtf_confluence, "news_filtered": "no",
-            })
-            self.telegram.notify_trade_open(
-                "[%s] %s" % (broker_label, symbol), signal, lot, confidence, market_eval["score"], mtf_confluence
-            )
-            if "deal" in result:
-                self._trade_open_times[result["deal"]] = datetime.now()
-        else:
-            self._record_request_metric(bkr_name, False, lat)
+        self._open_trade_with_protections(
+            bkr_name, symbol, signal_result,
+            float(market_eval["score"]),
+            analysis, latest, prices, source="smart")
 
     def _manage_open_positions(self, bkr_name: str):
         if self.dry_run:
@@ -1249,6 +1153,7 @@ class TradingBot:
                 continue
             current_price = prices[0] if pos["type"] == 0 else prices[1]
             pip_size = connector.get_pip_size(symbol)
+            atr_value = self._recent_atr(bkr_name, symbol)
             profile = self._get_symbol_profile(symbol)
             orig = {
                 "trail": rm.trailing_stop_pips,
@@ -1261,7 +1166,8 @@ class TradingBot:
                 rm.break_even_after_pips = profile["break_even_after_pips"]
             if "move_sl_to_be_pips" in profile:
                 rm.move_sl_to_be_pips = profile["move_sl_to_be_pips"]
-            new_sl = rm.check_trailing_stop(pos, current_price, pip_size)
+            new_sl = rm.check_trailing_stop(pos, current_price, pip_size,
+                                            atr_value=atr_value)
             if new_sl is not None:
                 connector.modify_position_sl(pos["ticket"], new_sl)
             else:
@@ -1292,7 +1198,10 @@ class TradingBot:
                 self._processed_deal_tickets.add(deal_key)
                 pnl = deal["profit"]
                 if rm:
-                    rm.record_trade(pnl)
+                    rm.record_trade(pnl, deal.get("symbol", ""))
+                    # Liberation du compteur de positions par symbole
+                    if rm.daily_positions_per_symbol.get(deal.get("symbol"), 0) > 0:
+                        rm.unregister_symbol_position(deal.get("symbol"))
                 if cm:
                     cm.record_trade_result(pnl)
                 self._log_trade_csv({
@@ -1361,91 +1270,237 @@ class TradingBot:
         signal = signal_result["signal"]
         if signal == "HOLD":
             return
-        mtf_confluence = 0
-        mtf_lot_mult = 1.0
-        if self.mtf.enabled:
-            mtf_result = self.mtf.analyze(connector, symbol, analysis, latest, signal)
-            mtf_confluence = mtf_result["confluence_score"]
-            mtf_lot_mult = mtf_result["lot_multiplier"]
-            if not mtf_result["confirmed"]:
-                return
-            signal = mtf_result["signal"]
-        news_lot_mult = self.news_filter.get_lot_multiplier(symbol)
-        balance = rm.balance
-        cm = self.compound_managers.get(bkr_name)
-        if cm:
-            lot = cm.calculate_stake(balance, signal_result["confidence"])
-        else:
-            lot = self.config["trading"]["default_lot_size"]
-        lot = lot * mtf_lot_mult * news_lot_mult
-        order_types = ORDER_TYPES.get(bkr_name, ORDER_TYPES["deriv"])
-        order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
 
         if self.dry_run:
             simulated_pnl = random.uniform(-1.5, 2.5)
             self._dry_run_pnl += simulated_pnl
             self._dry_run_trades.append({
-                "broker": bkr_name, "symbol": symbol, "direction": signal,
-                "confidence": signal_result["confidence"], "pnl": simulated_pnl,
+                "broker": bkr_name, "symbol": symbol,
+                "direction": strategy_result.get("signal"),
+                "confidence": signal_result.get("confidence"),
+                "pnl": simulated_pnl,
                 "time": datetime.now().isoformat()
             })
             if len(self._dry_run_trades) > 100:
                 self._dry_run_trades = self._dry_run_trades[-100:]
             logger.info(
-                "[DRY-RUN][%s] %s %s | confiance=%s | lot=%.2f | PnL simule=%+.2f",
-                bkr_name.upper(), signal, symbol, signal_result["confidence"], lot, simulated_pnl
-            )
-            self.telegram.notify_trade_open(
-                "[DRY-RUN][%s] %s" % (bkr_name.upper(), symbol),
-                signal, lot, signal_result["confidence"]
-            )
-            self.telegram.notify_info(
-                "[DRY-RUN] Aucun ordre reel envoye. Signal %s %s | PnL simule: %+.2f$"
-                % (signal, symbol, simulated_pnl)
-            )
+                "[DRY-RUN][%s] %s %s | conf=%s | PnL simule=%+.2f",
+                bkr_name.upper(), strategy_result.get("signal"), symbol,
+                signal_result.get("confidence"), simulated_pnl)
             return
 
-        # --- Protections SL/TP --------------------------------------------
-        # MT5 refuse les ordres dont le SL/TP vaut zero, et aucune position
-        # ne doit s'ouvrir sans stop-loss calcule depuis le profil symbole.
-        profile = self._get_symbol_profile(symbol)
-        pip_size = connector.get_pip_size(symbol)
-        symbol_info = connector.get_symbol_info(symbol) or {}
-        digits = symbol_info.get("digits", 5)
-        entry_price = prices[1] if signal == "BUY" else prices[0]
-        sl_tp_cfg = self.config.get("stop_loss_take_profit", {})
-        sl_pips = profile.get(
-            "default_sl_pips",
-            sl_tp_cfg.get("default_stop_loss_pips", 50),
-        )
-        tp_pips = profile.get(
-            "default_tp_pips",
-            sl_tp_cfg.get("default_take_profit_pips", 80),
-        )
-        if signal == "BUY":
-            sl = round(entry_price - sl_pips * pip_size, digits)
-            tp = round(entry_price + tp_pips * pip_size, digits)
-        else:
-            sl = round(entry_price + sl_pips * pip_size, digits)
-            tp = round(entry_price - tp_pips * pip_size, digits)
+        self._open_trade_with_protections(
+            bkr_name, symbol, signal_result,
+            float(signal_result.get("total_score") or 0.0),
+            analysis, latest, prices, source="signal")
 
+    # ==================================================================
+    #  OUVERTURE UNIFIEE AVEC PROTECTIONS DE RISQUE (v5)
+    # ==================================================================
+
+    def _store_atr(self, bkr_name: str, symbol: str, latest: dict):
+        """Memorise l'ATR courant pour le trailing stop dynamique."""
+        try:
+            atr = float(latest.get("atr") or 0.0)
+        except (TypeError, ValueError):
+            atr = 0.0
+        self._atr_cache["%s:%s" % (bkr_name, symbol)] = (atr, time.time())
+
+    def _recent_atr(self, bkr_name: str, symbol: str,
+                    max_age_s: float = 900) -> Optional[float]:
+        """Retourne l'ATR recent sinon None (evite des requetes supplementaires)."""
+        atr, ts = self._atr_cache.get("%s:%s" % (bkr_name, symbol), (0.0, 0.0))
+        if atr > 0 and (time.time() - ts) <= max_age_s:
+            return atr
+        return None
+
+    def _estimate_total_notional(self, bkr_name: str, positions: List[dict]) -> float:
+        """
+        Estimation prudente de l'exposition notionnelle (volume x prix x
+        taille de contrat ; profil > connecteur > convention FX=100000 /
+        autres=1). Limite inactive tant que max_total_exposure vaut 0.
+        """
+        conn = self.connectors.get(bkr_name)
+        total = 0.0
+        for p in positions or []:
+            sym = p.get("symbol", "")
+            vol = float(p.get("volume", 0) or 0)
+            price = float(p.get("price_open") or p.get("price") or 0)
+            contract = self._get_symbol_profile(sym).get("contract_size")
+            if contract is None and conn is not None:
+                contract = (conn.get_symbol_info(sym) or {}).get("contract_size")
+            if contract is None:
+                is_fx = (len(sym) == 6 and sym.isupper()
+                         and not sym.startswith(("R_", "BOOM", "CRASH", "frx")))
+                contract = 100000.0 if is_fx else 1.0
+            total += vol * price * float(contract)
+        return total
+
+    def _open_trade_with_protections(self, bkr_name: str, symbol: str,
+                                     strategy_result: Dict, market_score: float,
+                                     analysis: Dict, latest: Dict, prices,
+                                     source: str = "signal") -> bool:
+        """
+        Chemin d'execution UNIQUE (smart-scan ET legacy) garantissant :
+          1. confirmation multi-TF + filtre news par symbole
+          2. filtre de spread configurable (max_spread_pips)
+          3. lot dimensionne par risque cible SANS plancher : si le volume
+             requis est inferieur au lot minimum, le trade est ANNULE
+             (imposer le plancher ferait exploser le risque reel)
+          4. SL/TP dynamiques ATR si use_dynamic_sl_tp actif, sinon fixes
+             du profil - toujours >= stops_level du broker
+          5. enregistrement complet (metriques, CSV, registre par symbole)
+        Retourne True si l'ordre a ete envoye avec succes.
+        """
+        logger = logging.getLogger(__name__)
+        connector = self.connectors[bkr_name]
+        rm = self.risk_managers.get(bkr_name)
+        if not rm:
+            return False
+        broker_label = "Deriv" if bkr_name == "deriv" else "MT5"
+
+        signal = strategy_result.get("signal")
+        confidence = strategy_result.get("confidence")
+        if signal not in ("BUY", "SELL"):
+            return False
+        self._store_atr(bkr_name, symbol, latest)
+
+        # --- Confirmation multi-TF ---------------------------------------
+        mtf_confluence = 0
+        mtf_lot_mult = 1.0
+        if self.mtf.enabled:
+            mtf_result = self.mtf.analyze(connector, symbol, analysis, latest, signal)
+            mtf_confluence = mtf_result.get("confluence_score", 0)
+            mtf_lot_mult = mtf_result.get("lot_multiplier", 1.0)
+            if not mtf_result.get("confirmed", False):
+                logger.info("[%s] %s: signal non confirme multi-TF (%s).",
+                            broker_label, symbol, source)
+                self.telegram.notify_mtf_block(
+                    "[%s] %s" % (broker_label, symbol),
+                    mtf_result.get("details"))
+                return False
+            signal = mtf_result.get("signal", signal)
+
+        # --- Filtre news par symbole -------------------------------------
+        safe, news_reason = self.news_filter.is_safe_to_trade(symbol)
+        if not safe:
+            logger.info("[%s] %s: trade bloque par news (%s).",
+                        broker_label, symbol, news_reason)
+            return False
+        news_lot_mult = self.news_filter.get_lot_multiplier(symbol)
+
+        bid, ask = float(prices[0]), float(prices[1])
+        entry_price = ask if signal == "BUY" else bid
+        pip_size = connector.get_pip_size(symbol)
+        profile = self._get_symbol_profile(symbol)
+        sl_tp_cfg = self.config.get("stop_loss_take_profit", {})
+
+        # --- Filtre de spread --------------------------------------------
+        max_spread_pips = profile.get(
+            "max_spread_pips",
+            self.config.get("trading", {}).get("max_spread_pips", 10.0))
+        ok_spread, spread_now = spread_ok(bid, ask, max_spread_pips, pip_size)
+        if not ok_spread:
+            logger.warning(
+                "[%s] %s: spread %.1f pips > limite %.1f pips. Trade annule.",
+                broker_label, symbol, spread_now, max_spread_pips)
+            return False
+
+        # --- Distances SL/TP : ATR dynamique sinon fixes du profil -------
+        atr_value = latest.get("atr")
+        use_dynamic = bool(sl_tp_cfg.get("use_dynamic_sl_tp")) \
+            and atr_value is not None and float(atr_value) > 0
+        if use_dynamic:
+            sl_dist = float(atr_value) * profile.get(
+                "atr_sl_multiplier", sl_tp_cfg.get("atr_sl_multiplier", 1.5))
+            tp_dist = float(atr_value) * profile.get(
+                "atr_tp_multiplier", sl_tp_cfg.get("atr_tp_multiplier", 2.5))
+            sl_mode = "ATR"
+        else:
+            sl_pips = profile.get(
+                "default_sl_pips",
+                sl_tp_cfg.get("default_stop_loss_pips", 50))
+            tp_pips = profile.get(
+                "default_tp_pips",
+                sl_tp_cfg.get("default_take_profit_pips", 80))
+            sl_dist = sl_pips * pip_size
+            tp_dist = tp_pips * pip_size
+            sl_mode = "FIXE"
+
+        symbol_info = connector.get_symbol_info(symbol) or {}
+        digits = int(symbol_info.get("digits", 5))
+        min_stop_distance = float(symbol_info.get("stops_level", 0)) * (10 ** (-digits))
+        prot = protected_sl_tp(entry_price, signal, sl_dist, tp_dist,
+                               digits, min_stop_distance)
+        sl, tp = prot["sl"], prot["tp"]
+        eff_sl_pips = max(prot["sl_dist"], pip_size) / pip_size
+
+        # --- Lot : risque cible sans plancher puis faisabilite -----------
+        raw_lot = rm.calculate_lot_size(
+            eff_sl_pips,
+            profile.get("pip_value_per_lot", 10.0),
+            respect_min=False,
+        ) * mtf_lot_mult * news_lot_mult
+
+        min_lot = symbol_info.get(
+            "min_lot", self.config["trading"].get("min_lot_size", 0.01))
+        max_lot = min(profile.get("max_lot",
+                                  self.config["trading"]["max_lot_size"]),
+                      symbol_info.get("max_lot",
+                                      self.config["trading"]["max_lot_size"]))
+        lot_step = symbol_info.get(
+            "lot_step", self.config["trading"].get("lot_step", 0.01))
+
+        lot = feasibility_lot(raw_lot, min_lot, max_lot, lot_step)
+        if lot is None:
+            logger.warning(
+                "[%s] %s: SKIP - lot theorique (%.4f) < lot minimum (%s). "
+                "Respecter le plancher violerait la regle de risque.",
+                broker_label, symbol, raw_lot, min_lot)
+            return False
+
+        logger.info(
+            "** [%s] TRADE %s | %s | src=%s | Score=%s | Conf=%s%% | MTF=%s | "
+            "SL=%s/%s | Volume=%s | Risque cible=%.2f$ **",
+            broker_label, symbol, signal, source, market_score, confidence,
+            mtf_confluence, sl_mode,
+            round(eff_sl_pips, 1),
+            round(prot["tp_dist"] / pip_size, 1) if pip_size > 0 else 0,
+            lot, rm.balance * rm.max_risk_pct / 100.0)
+
+        order_types = ORDER_TYPES.get(bkr_name, ORDER_TYPES["deriv"])
+        order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
+        comment = "BOT_%s_%s%%_M%s_TF%s_SL%s" % (
+            signal, confidence, market_score, mtf_confluence, sl_mode)
+
+        start_t = time.time()
         result = connector.open_position(
-            symbol=symbol, order_type=order_type, lot=lot, sl=sl, tp=tp,
-            comment="BOT_%s_TF%.1f" % (signal, mtf_confluence)
-        )
+            symbol=symbol, order_type=order_type,
+            lot=lot, sl=sl, tp=tp, comment=comment)
+        lat = (time.time() - start_t) * 1000
+
         if result and result.get("success"):
+            self._record_request_metric(bkr_name, True, lat)
             self._log_trade_csv({
-                "broker": bkr_name, "symbol": symbol, "direction": signal, "lot": lot,
-                "entry_price": result["price"], "sl": sl, "tp": tp,
-                "score": signal_result["total_score"],
-                "confidence": signal_result["confidence"],
-                "reason": "signal", "mtf_confluence": mtf_confluence
+                "broker": bkr_name, "symbol": symbol, "direction": signal,
+                "lot": lot, "entry_price": result.get("price"),
+                "sl": sl, "tp": tp,
+                "score": strategy_result.get("total_score"),
+                "confidence": confidence, "market_score": market_score,
+                "mtf_confluence": mtf_confluence, "news_filtered": "no",
             })
             self.telegram.notify_trade_open(
-                "[%s] %s" % (bkr_name.upper(), symbol), signal, lot, signal_result["confidence"]
-            )
+                "[%s] %s" % (broker_label, symbol), signal, lot,
+                confidence, market_score, mtf_confluence)
             if "deal" in result:
                 self._trade_open_times[result["deal"]] = datetime.now()
+            rm.register_symbol_position(symbol)
+            return True
+
+        self._record_request_metric(bkr_name, False, lat)
+        logger.error("[%s] %s: echec envoi ordre (resultat=%s)",
+                     broker_label, symbol, result)
+        return False
 
     def _is_trading_session(self) -> bool:
         sc = self.config.get("session_filter", {})

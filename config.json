@@ -36,7 +36,8 @@
     "lot_step": 0.35,
     "magic_number": 987654,
     "deviation_slippage": 20,
-    "close_positions_on_stop": true
+    "close_positions_on_stop": true,
+    "max_spread_pips": 10.0
   },
 
   "symbol_profiles": {

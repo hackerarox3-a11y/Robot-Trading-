@@ -10,6 +10,8 @@ import logging
 from datetime import datetime, date, time
 from typing import Dict, Optional, Tuple, List
 
+from utils import normalize_lot
+
 logger = logging.getLogger(__name__)
 
 
@@ -259,7 +261,7 @@ class RiskManager:
     #  VÉRIFICATIONS DE RISQUE
     # ==================================================================
 
-    def can_open_position(self, current_positions: int, symbol: str = "") -> Tuple[bool, str]:
+    def set_total_exposure(self, exposure: float):
         """
         Vérifie si on peut ouvrir une nouvelle position.
 
@@ -355,7 +357,8 @@ class RiskManager:
     #  CALCUL DE LA TAILLE DE POSITION (LOT)
     # ==================================================================
 
-    def calculate_lot_size(self, stop_loss_pips: float, pip_value: float = 10.0) -> float:
+    def calculate_lot_size(self, stop_loss_pips: float, pip_value: float = 10.0,
+                           respect_min: bool = True) -> float:
         """
         Calcule la taille du lot basée sur le risque par trade.
         Intègre le dimensionnement dynamique basé sur le win rate,
@@ -364,6 +367,9 @@ class RiskManager:
         Args:
             stop_loss_pips: Distance du stop-loss en pips
             pip_value: Valeur d'un pip pour 1 lot standard (défaut 10 USD pour forex)
+            respect_min: Si False, retourne le lot theorique SANS plancher
+                minimum (utilise pour verifier la faisabilite avant d'imposer
+                un plancher qui violerait la regle de risque).
 
         Returns:
             Taille du lot arrondie au lot_step
@@ -396,11 +402,17 @@ class RiskManager:
                 f"facteur {news_mult:.2f}"
             )
 
-        # Arrondir au lot_step
-        lot = round(lot / self.lot_step) * self.lot_step
-
-        # Limiter entre min et max
-        lot = max(self.min_lot, min(self.max_lot, lot))
+        # Arrondir au lot_step puis borner
+        if respect_min:
+            lot = normalize_lot(lot, self.min_lot, self.max_lot, self.lot_step)
+        else:
+            try:
+                step = float(self.lot_step)
+            except (TypeError, ValueError):
+                step = 0.0
+            if step <= 0:
+                step = self.min_lot if self.min_lot > 0 else 0.01
+            lot = min(self.max_lot, max(0.0, round(lot / step) * step))
 
         logger.info(
             f"calcul lot : risque max {max_risk_amount:.2f} {self.currency} | "
