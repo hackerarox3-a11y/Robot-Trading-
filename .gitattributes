@@ -1,0 +1,16 @@
+# Normalisation des fins de ligne
+# - text=auto : git decide des fichiers texte et normalise en LF dans le depot
+# - les binaires restent ignores automatiquement via l'inspection de git
+* text=auto
+
+# Scripts Windows
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Fichiers du bot
+*.py text
+*.json text
+*.md text
+*.csv text
+*.txt text
+.env.example text
