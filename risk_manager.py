@@ -262,6 +262,10 @@ class RiskManager:
     # ==================================================================
 
     def set_total_exposure(self, exposure: float):
+        """Met a jour l'exposition notionnelle totale courante."""
+        self.current_total_exposure = max(0.0, float(exposure))
+
+    def can_open_position(self, current_positions: int, symbol: str = "") -> Tuple[bool, str]:
         """
         Vérifie si on peut ouvrir une nouvelle position.
 
