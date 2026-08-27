@@ -1470,8 +1470,14 @@ class TradingBot:
 
         order_types = ORDER_TYPES.get(bkr_name, ORDER_TYPES["deriv"])
         order_type = order_types["buy"] if signal == "BUY" else order_types["sell"]
-        comment = "BOT_%s_%s%%_M%s_TF%s_SL%s" % (
-            signal, confidence, market_score, mtf_confluence, sl_mode)
+        # Commentaire assaini : caracteres alphanumeriques + underscore
+        # uniquement (MT5/Exness rejette certains caracteres comme '%'),
+        # longueur <= 31.
+        comment = "BOT_%s_C%s_M%s_%s" % (
+            str(signal)[:4],
+            int(float(confidence or 0)),
+            int(float(market_score or 0)),
+            ("SL" + sl_mode)[:6])
 
         start_t = time.time()
         result = connector.open_position(
