@@ -317,7 +317,7 @@
   },
 
   "multi_timeframe": {
-    "enabled": true,
+    "enabled": false,
     "confirm_timeframes": ["M15", "H1"],
     "min_agreement": 1,
     "bars_per_timeframe": 300,
