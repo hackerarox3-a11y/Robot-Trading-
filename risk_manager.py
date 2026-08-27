@@ -410,13 +410,12 @@ class RiskManager:
         if respect_min:
             lot = normalize_lot(lot, self.min_lot, self.max_lot, self.lot_step)
         else:
-            try:
-                step = float(self.lot_step)
-            except (TypeError, ValueError):
-                step = 0.0
-            if step <= 0:
-                step = self.min_lot if self.min_lot > 0 else 0.01
-            lot = min(self.max_lot, max(0.0, round(lot / step) * step))
+            # Lot THEORIQUE BRUT : pas d'arrondi au pas de config ici.
+            # Arrondir au `trading.lot_step` (ex 0.35) casserait les petits
+            # comptes en ramenant un lot de 0.09 a 0.00 (au lieu de valider
+            # le risque reel). L'arrondi au pas REEL du symbole et le test de
+            # faisabilite sont geres par feasibility_lot() dans main.py.
+            lot = min(self.max_lot, max(0.0, float(lot)))
 
         logger.info(
             f"calcul lot : risque max {max_risk_amount:.2f} {self.currency} | "

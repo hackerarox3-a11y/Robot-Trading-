@@ -40,6 +40,22 @@ class SizingFeasibilityTests(unittest.TestCase):
         self.assertIsNotNone(ok)
         self.assertAlmostEqual(ok, 2.35, delta=1e-9)
 
+    def test_small_account_raw_lot_not_rounded_to_zero_by_config_step(self):
+        # Regression : le lot_step de config (0.35) ne doit plus ecraser
+        # le lot theorique (0.09) a 0.00 quand respect_min=False.
+        rm = build_rm(494.75)
+        raw = rm.calculate_lot_size(5.3, 10.0, respect_min=False)
+        self.assertGreater(raw, 0.0)
+        self.assertAlmostEqual(raw, 0.093, delta=0.01)
+
+    def test_feasibility_returns_valid_small_lot(self):
+        # Sur compte demo reel le lot 0.09 est valide et respecte le risque
+        rm = build_rm(494.75)
+        raw = rm.calculate_lot_size(5.3, 10.0, respect_min=False)
+        lot = feasibility_lot(raw, 0.01, 10.0, 0.01)
+        self.assertIsNotNone(lot)
+        self.assertAlmostEqual(lot, 0.09, delta=0.01)
+
     def test_unregister_never_negative(self):
         rm = build_rm()
         rm.unregister_symbol_position("XAUUSD")  # jamais enregistre
