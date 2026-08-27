@@ -737,7 +737,9 @@ class MT5Connector:
                 "tp": pos.tp,
                 "profit": pos.profit,
                 "comment": pos.comment,
-                "time_open": pos.time_open,
+                # Le champ MT5 pour le temps d'ouverture est `time`
+                # (pas `time_open`, qui planterait early-binding).
+                "time_open": getattr(pos, "time_open", None) or getattr(pos, "time", None),
             }
 
             # Ajouter le spread actuel si disponible
