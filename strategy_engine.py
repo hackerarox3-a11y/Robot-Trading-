@@ -19,6 +19,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from smart_money import SmartMoneyAnalyzer
+from decision_engine import DecisionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class StrategyEngine:
         self.w_pivot = weights.get("pivot_points", 0.08)
         self.w_smart_money = float(config.get("smart_money", {}).get("weight", 0.15))
         self.smart_money = SmartMoneyAnalyzer(config)
+        self.decision_engine = DecisionEngine(config)
         self.timeframe_analyzer = timeframe_analyzer
 
         # Seuils de base
@@ -662,6 +664,14 @@ class StrategyEngine:
             if not timeframe_result.get("allowed", False):
                 signal = "HOLD"
 
+        decision = self.decision_engine.evaluate(
+            latest=vals,
+            technical_signal=signal,
+            smart_money=smart_money,
+            timeframe_analysis=timeframe_result,
+        )
+        signal = decision["signal"]
+
         # Score de qualite
         quality = self._calculate_signal_quality(scores, total, vals)
 
@@ -678,6 +688,11 @@ class StrategyEngine:
             "smart_money": smart_money,
             "smart_money_score": round(smart_money_score, 4),
             "timeframe_analysis": timeframe_result,
+            "decision_score": decision["decision_score"],
+            "buy_probability": decision["buy_probability"],
+            "sell_probability": decision["sell_probability"],
+            "decision_confidence": decision["confidence"],
+            "reasons": decision["reasons"],
         }
 
         logger.info(

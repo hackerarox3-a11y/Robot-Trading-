@@ -1401,6 +1401,16 @@ class TradingBot:
         confidence = strategy_result.get("confidence")
         if signal not in ("BUY", "SELL"):
             return False
+        buy_probability = float(strategy_result.get("buy_probability", 0.0) or 0.0)
+        sell_probability = float(strategy_result.get("sell_probability", 0.0) or 0.0)
+        selected_probability = buy_probability if signal == "BUY" else sell_probability
+        if selected_probability < 92.0:
+            logger.info(
+                "[%s] %s: decision V5 refusee, probabilite %.2f%% < 92%% | %s",
+                broker_label, symbol, selected_probability,
+                " | ".join(strategy_result.get("reasons", [])),
+            )
+            return False
         self._store_atr(bkr_name, symbol, latest)
 
         # --- Confirmation multi-TF ---------------------------------------
@@ -1535,7 +1545,8 @@ class TradingBot:
             })
             self.telegram.notify_trade_open(
                 "[%s] %s" % (broker_label, symbol), signal, lot,
-                confidence, market_score, mtf_confluence)
+                confidence, market_score, mtf_confluence,
+                strategy_result.get("reasons", []))
             if "deal" in result:
                 self._trade_open_times[result["deal"]] = datetime.now()
             rm.register_symbol_position(symbol)
