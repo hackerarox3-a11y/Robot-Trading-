@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 from smart_money import SmartMoneyAnalyzer
 from decision_engine import DecisionEngine
+from quality_engine import QualityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class StrategyEngine:
         self.w_smart_money = float(config.get("smart_money", {}).get("weight", 0.15))
         self.smart_money = SmartMoneyAnalyzer(config)
         self.decision_engine = DecisionEngine(config)
+        self.quality_engine = QualityEngine(config)
         self.timeframe_analyzer = timeframe_analyzer
 
         # Seuils de base
@@ -737,6 +739,15 @@ class StrategyEngine:
             timeframe_analysis=timeframe_result,
         )
         signal = decision["signal"]
+        quality = self.quality_engine.evaluate(
+            latest=vals,
+            strategy_scores=scores,
+            signal=signal,
+            smart_money=smart_money,
+            timeframe_analysis=timeframe_result,
+        )
+        if not quality["accepted"]:
+            signal = "HOLD"
 
         # Score de qualite
         quality = self._calculate_signal_quality(scores, total, vals)
@@ -759,6 +770,10 @@ class StrategyEngine:
             "sell_probability": decision["sell_probability"],
             "decision_confidence": decision["confidence"],
             "reasons": decision["reasons"],
+            "quality_score": quality["quality_score"],
+            "quality_level": quality["quality_level"],
+            "quality_accepted": quality["accepted"],
+            "quality_details": quality["details"],
         }
 
         logger.info(

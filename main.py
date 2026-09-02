@@ -1483,6 +1483,32 @@ class TradingBot:
         sl, tp = prot["sl"], prot["tp"]
         eff_sl_pips = max(prot["sl_dist"], pip_size) / pip_size
 
+        quality = self.quality_engine.evaluate(
+            latest=latest,
+            strategy_scores=strategy_result.get("strategy_scores", {}),
+            signal=signal,
+            smart_money=strategy_result.get("smart_money", {}),
+            timeframe_analysis=strategy_result.get("timeframe_analysis"),
+            risk_context={
+                "news_safe": True,
+                "spread_ok": True,
+                "spread_pips": spread_now,
+                "max_spread_pips": max_spread_pips,
+                "atr_ok": bool(atr_value and float(atr_value) > 0),
+                "liquidity_score": 100.0,
+            },
+        )
+        strategy_result["quality_score"] = quality["quality_score"]
+        strategy_result["quality_level"] = quality["quality_level"]
+        strategy_result["quality_details"] = quality["details"]
+        if not quality["accepted"]:
+            logger.info(
+                "[%s] %s: qualité %.2f/100 (%s), trade bloque: %s",
+                broker_label, symbol, quality["quality_score"],
+                quality["quality_level"], " | ".join(quality["details"]),
+            )
+            return False
+
         # --- Lot : risque cible sans plancher puis faisabilite -----------
         raw_lot = rm.calculate_lot_size(
             eff_sl_pips,
@@ -1546,7 +1572,10 @@ class TradingBot:
             self.telegram.notify_trade_open(
                 "[%s] %s" % (broker_label, symbol), signal, lot,
                 confidence, market_score, mtf_confluence,
-                strategy_result.get("reasons", []))
+                strategy_result.get("reasons", []),
+                strategy_result.get("quality_score"),
+                strategy_result.get("quality_level"),
+                strategy_result.get("quality_details", []))
             if "deal" in result:
                 self._trade_open_times[result["deal"]] = datetime.now()
             rm.register_symbol_position(symbol)

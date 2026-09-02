@@ -302,7 +302,10 @@ class TelegramNotifier:
                            stake: float, confidence: float,
                            market_score: float = 0,
                            mtf_score: float = 0,
-                           reasons=None):
+                           reasons=None,
+                           quality_score: float = None,
+                           quality_level: str = "",
+                           quality_details=None):
         if not self.enabled or not self.notify_trades:
             return
         emoji = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
@@ -331,6 +334,10 @@ class TelegramNotifier:
         if reasons:
             text += "\U0001f9e0 <b>Decision V5:</b>\n"
             text += "\n".join("- " + str(reason) for reason in reasons[:6]) + "\n"
+        if quality_score is not None:
+            text += f"\U0001f3c6 <b>Qualité: {quality_score:.0f}/100 ({quality_level})</b>\n"
+            if quality_details:
+                text += "\n".join("- " + str(detail) for detail in quality_details[:9]) + "\n"
         text += f"\U0001f552 {datetime.now().strftime('%H:%M:%S')}"
 
         self._send_message(text, reply_markup=self._build_trade_keyboard())
