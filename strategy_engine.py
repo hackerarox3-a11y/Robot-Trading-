@@ -31,7 +31,7 @@ class StrategyEngine:
     Ajoute un score de qualite (0-100) et une indication de force.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, timeframe_analyzer=None):
         self.config = config
         weights = config["strategy_weights"]
         ind = config["indicators"]
@@ -50,6 +50,7 @@ class StrategyEngine:
         self.w_pivot = weights.get("pivot_points", 0.08)
         self.w_smart_money = float(config.get("smart_money", {}).get("weight", 0.15))
         self.smart_money = SmartMoneyAnalyzer(config)
+        self.timeframe_analyzer = timeframe_analyzer
 
         # Seuils de base
         self.buy_threshold = weights["buy_threshold"]
@@ -572,7 +573,8 @@ class StrategyEngine:
     # ------------------------------------------------------------------
 
     def generate_signal(self, latest_values: Dict, close_price: float,
-                        ohlc_data: Optional[Dict] = None) -> Dict:
+                        ohlc_data: Optional[Dict] = None,
+                        symbol: Optional[str] = None) -> Dict:
         """
         Combine toutes les strategies et genere un signal de trading.
 
@@ -654,6 +656,12 @@ class StrategyEngine:
                 signal = "HOLD"
                 confidence = min(confidence, 50.0)
 
+        timeframe_result = None
+        if self.timeframe_analyzer is not None and symbol:
+            timeframe_result = self.timeframe_analyzer.combine_timeframes(symbol, signal)
+            if not timeframe_result.get("allowed", False):
+                signal = "HOLD"
+
         # Score de qualite
         quality = self._calculate_signal_quality(scores, total, vals)
 
@@ -669,6 +677,7 @@ class StrategyEngine:
             "strength": strength,
             "smart_money": smart_money,
             "smart_money_score": round(smart_money_score, 4),
+            "timeframe_analysis": timeframe_result,
         }
 
         logger.info(

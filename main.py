@@ -54,6 +54,7 @@ from strategy_engine import StrategyEngine
 from market_selector import MarketSelector
 from compound_manager import CompoundManager
 from multi_timeframe import MultiTimeframeAnalyzer
+from timeframe_analyzer import TimeframeAnalyzer
 from news_filter import NewsFilter
 from telegram_notifier import TelegramNotifier
 from telegram_bot import TelegramCommandBot
@@ -152,10 +153,15 @@ class TradingBot:
         # --- Connecteurs ---
         self.connectors: Dict[str, object] = {}
         self._init_connectors()
+        timeframe_connector = self.connectors.get("mt5") or self.connectors.get("deriv")
+        self.timeframe_analyzer = (
+            TimeframeAnalyzer(timeframe_connector, self.config)
+            if timeframe_connector is not None else None
+        )
 
         # --- Analyse technique et strategies ---
         self.technical = TechnicalAnalysis(self.config)
-        self.strategy = StrategyEngine(self.config)
+        self.strategy = StrategyEngine(self.config, self.timeframe_analyzer)
         self.risk_managers: Dict[str, RiskManager] = {}
         self.market_selector = MarketSelector(self.config)
         self.compound_managers: Dict[str, CompoundManager] = {}
@@ -376,7 +382,7 @@ class TradingBot:
                     sym_config["strategy_weights"] = profile["strategy_weights"]
                 self._symbol_engines[symbol] = {
                     "ta": TechnicalAnalysis(sym_config),
-                    "strategy": StrategyEngine(sym_config),
+                    "strategy": StrategyEngine(sym_config, self.timeframe_analyzer),
                 }
             else:
                 self._symbol_engines[symbol] = {"ta": self.technical, "strategy": self.strategy}
@@ -1103,7 +1109,7 @@ class TradingBot:
             return None
         current_price = prices[1]
         evaluation = self.market_selector.evaluate_market(symbol, analysis, latest, current_price)
-        signal_result = strategy.generate_signal(latest, current_price, ohlc)
+        signal_result = strategy.generate_signal(latest, current_price, ohlc, symbol)
         evaluation["signal"] = signal_result["signal"]
         if signal_result["signal"] != "HOLD" and self.mtf.enabled:
             mtf_result = self.mtf.analyze(connector, symbol, analysis, latest, signal_result["signal"])
@@ -1158,7 +1164,7 @@ class TradingBot:
         if prices is None:
             return
         current_price = prices[1]
-        signal_result = strategy.generate_signal(latest, current_price, ohlc)
+        signal_result = strategy.generate_signal(latest, current_price, ohlc, symbol)
         signal = signal_result["signal"]
         confidence = signal_result["confidence"]
 
@@ -1298,7 +1304,7 @@ class TradingBot:
         if prices is None:
             return
         current_price = prices[1]
-        signal_result = strategy.generate_signal(latest, current_price, ohlc)
+        signal_result = strategy.generate_signal(latest, current_price, ohlc, symbol)
         signal = signal_result["signal"]
         if signal == "HOLD":
             return
