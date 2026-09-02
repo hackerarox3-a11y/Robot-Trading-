@@ -71,14 +71,14 @@ class TelegramCommandBot:
         self.config = config
         tg = config.get("telegram", {})
         self.enabled = tg.get("enabled", False)
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN", tg.get("bot_token", ""))
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", str(tg.get("chat_id", "")))
+        self.token = os.getenv("TELEGRAM_TOKEN", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         self.allowed_chat_ids = [self.chat_id]
         # Ajouter d'autres chat_ids autorises si configures
         extra = tg.get("allowed_chat_ids", [])
         if extra:
             self.allowed_chat_ids.extend([str(c) for c in extra])
-        self.admin_password = os.getenv("TELEGRAM_ADMIN_PASSWORD", tg.get("admin_password", ""))
+        self.admin_password = os.getenv("TELEGRAM_ADMIN_PASSWORD", "")
         self._offset = 0
         self._running = False
         self._thread = None
@@ -101,6 +101,12 @@ class TelegramCommandBot:
         self._on_clear_stats: Optional[Callable] = None
         self._on_set_config: Optional[Callable] = None
         self._on_restart: Optional[Callable] = None
+        self._on_get_gold: Optional[Callable] = None
+        self._on_get_deriv: Optional[Callable] = None
+        self._on_get_signals: Optional[Callable] = None
+        self._on_get_quality: Optional[Callable] = None
+        self._on_get_ai: Optional[Callable] = None
+        self._on_get_logs: Optional[Callable] = None
         # Chemin du CSV de trades
         self._trades_csv = config.get("logging", {}).get("trades_csv_file", "trades_history.csv")
 
@@ -117,7 +123,9 @@ class TelegramCommandBot:
 
     def connect_extended_callbacks(self, trades_fn=None, risk_fn=None, compound_fn=None,
                                     performance_fn=None, clear_fn=None, set_fn=None,
-                                    restart_fn=None):
+                                    restart_fn=None, gold_fn=None, deriv_fn=None,
+                                    signals_fn=None, quality_fn=None, ai_fn=None,
+                                    logs_fn=None):
         """Connecte les callbacks etendus (v4)."""
         if trades_fn:
             self._on_get_trades = trades_fn
@@ -133,6 +141,12 @@ class TelegramCommandBot:
             self._on_set_config = set_fn
         if restart_fn:
             self._on_restart = restart_fn
+        self._on_get_gold = gold_fn
+        self._on_get_deriv = deriv_fn
+        self._on_get_signals = signals_fn
+        self._on_get_quality = quality_fn
+        self._on_get_ai = ai_fn
+        self._on_get_logs = logs_fn
 
     def start(self):
         """Demarre le listener dans un thread separe."""
@@ -347,6 +361,20 @@ class TelegramCommandBot:
             return self._cmd_compound(chat_id)
         elif cmd == "/performance":
             return self._cmd_performance(chat_id)
+        elif cmd == "/gold":
+            return self._cmd_dynamic(chat_id, self._on_get_gold, "GOLD")
+        elif cmd == "/deriv":
+            return self._cmd_dynamic(chat_id, self._on_get_deriv, "DERIV")
+        elif cmd == "/signals":
+            return self._cmd_dynamic(chat_id, self._on_get_signals, "SIGNALS")
+        elif cmd == "/quality":
+            return self._cmd_dynamic(chat_id, self._on_get_quality, "QUALITY")
+        elif cmd == "/session":
+            return self._cmd_session(chat_id)
+        elif cmd == "/ai":
+            return self._cmd_dynamic(chat_id, self._on_get_ai, "AI")
+        elif cmd == "/logs":
+            return self._cmd_logs(chat_id)
 
         # Commandes protegees par mot de passe
         if cmd == "/switch":
@@ -660,6 +688,45 @@ class TelegramCommandBot:
                 "\u26a0\ufe0f <b>PERFORMANCE</b>\n\n"
                 "Callback non connecte. Les statistiques ne sont pas encore disponibles."
             )
+
+    def _cmd_dynamic(self, chat_id: str, callback: Optional[Callable], title: str):
+        """Send a premium view supplied by the TradingBot callback."""
+        if callback:
+            try:
+                result = callback()
+                self._send_message(chat_id, str(result))
+                return
+            except Exception as error:
+                logger.exception("Commande /%s en erreur", title.lower())
+                self._send_message(chat_id, "Erreur %s: %s" % (title, error))
+                return
+        self._send_message(chat_id, "<b>%s</b>\nDonnees indisponibles." % title)
+
+    def _cmd_session(self, chat_id: str):
+        duration = str(datetime.now() - self._session_start).split(".")[0]
+        trade_count = int(getattr(self, "_trade_count", 0))
+        daily_pnl = float(getattr(self, "_daily_pnl", 0.0))
+        win_count = int(getattr(self, "_win_count", 0))
+        self._send_message(chat_id,
+            "<b>SESSION</b>\n"
+            "Debut: %s\nDuree: %s\nTrades: %d\nPnL journalier: %+.2f$\n"
+            "Win rate: %.1f%%" % (
+                self._session_start.strftime("%Y-%m-%d %H:%M"), duration,
+                trade_count, daily_pnl,
+                win_count / trade_count * 100 if trade_count else 0,
+            ))
+
+    def _cmd_logs(self, chat_id: str):
+        if self._on_get_logs:
+            return self._cmd_dynamic(chat_id, self._on_get_logs, "LOGS")
+        path = self.config.get("logging", {}).get("log_file", "trading_bot.log")
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as log_file:
+                lines = log_file.readlines()[-30:]
+            log_text = "".join(lines)
+            self._send_message(chat_id, "<b>LOGS RECENTS</b>\n<pre>%s</pre>" % log_text[-3700:])
+        except OSError as error:
+            self._send_message(chat_id, "<b>LOGS</b>\nIndisponibles: %s" % error)
 
     def _cmd_clear(self, chat_id: str, args: list):
         """Remet a zero les statistiques quotidiennes."""

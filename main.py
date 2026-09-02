@@ -50,12 +50,26 @@ from typing import Dict, List, Optional
 
 from technical_analysis import TechnicalAnalysis
 from risk_manager import RiskManager
+from smart_exit import SmartExitManager
 from strategy_engine import StrategyEngine
 from market_selector import MarketSelector
 from compound_manager import CompoundManager
 from multi_timeframe import MultiTimeframeAnalyzer
 from timeframe_analyzer import TimeframeAnalyzer
 from news_filter import NewsFilter
+from session_engine import SessionEngine
+from correlation_engine import CorrelationEngine
+from news_ai import NewsAI
+from deriv_intelligence import DerivIntelligence
+from auto_learning import AutoLearning
+from hyperparameter_optimizer import HyperparameterOptimizer
+from performance_analytics import PerformanceAnalytics
+from self_optimizer import SelfOptimizer
+from walk_forward import WalkForwardOptimizer
+from monte_carlo_risk import MonteCarloRisk
+from security import load_environment, require_live_environment, validate_environment
+from typed_config import load_typed_config
+from logging_system import configure_logging, event, exception
 from telegram_notifier import TelegramNotifier
 from telegram_bot import TelegramCommandBot
 from deriv_connector import DerivConnector, ORDER_TYPE_BUY as DERIV_BUY, ORDER_TYPE_SELL as DERIV_SELL
@@ -92,23 +106,7 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(config: dict):
-    log_cfg = config["logging"]
-    log_level = getattr(logging, log_cfg.get("level", "INFO"))
-    log_format = "%(asctime)s [%(levelname)-7s] %(name)-25s | %(message)s"
-    date_format = "%Y-%m-%d %H:%M:%S"
-    handlers = [logging.StreamHandler()]
-    if log_cfg.get("log_to_file", True):
-        log_file = log_cfg.get("log_file", "trading_bot.log")
-        # Rotation du fichier de log pour eviter une croissance infinie
-        max_bytes = int(log_cfg.get("log_max_bytes", 10 * 1024 * 1024))
-        backup_count = int(log_cfg.get("log_backup_count", 3))
-        if backup_count <= 0:
-            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
-        else:
-            handlers.append(
-                RotatingFileHandler(log_file, encoding="utf-8", maxBytes=max_bytes, backupCount=backup_count)
-            )
-    logging.basicConfig(level=log_level, format=log_format, datefmt=date_format, handlers=handlers)
+    configure_logging(config)
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -128,16 +126,22 @@ class TradingBot:
     """Robot de trading multi-broker avec controle Telegram avance."""
 
     def __init__(self, config_path: str, dry_run: bool = False, broker: str = None,
-                 demo_only: bool = False, demo_live: bool = False):
+                 demo_only: bool = False, demo_live: bool = False, mode: str = None):
         if demo_only and demo_live:
             raise ValueError("demo_only et demo_live sont incompatibles")
-        self.dry_run = dry_run or demo_only
+        self.mode = (mode or ("PAPER" if dry_run or demo_only else "LIVE")).upper()
+        if self.mode not in ("PAPER", "SIMULATION", "LIVE"):
+            raise ValueError("mode doit etre PAPER, SIMULATION ou LIVE")
+        self.dry_run = self.mode != "LIVE"
         self.demo_only = demo_only
         self.demo_live = demo_live
         self.config_path = config_path
         self.config = self._load_config(config_path)
         self.config["_path"] = config_path
         self.config["_dry_run"] = dry_run
+        load_environment()
+        require_live_environment(self.mode, broker or self.config.get("active_broker", "both"),
+                      bool(self.config.get("telegram", {}).get("enabled", False))) if self.mode == "LIVE" else None
         if demo_live:
             self.config.setdefault("multi_timeframe", {})["mode"] = "soft"
         self.running = False
@@ -163,6 +167,8 @@ class TradingBot:
         self.technical = TechnicalAnalysis(self.config)
         self.strategy = StrategyEngine(self.config, self.timeframe_analyzer)
         self.risk_managers: Dict[str, RiskManager] = {}
+        self.smart_exit = SmartExitManager(self.config)
+        self._smart_exit_tp_done: Dict[int, set] = {}
         self.market_selector = MarketSelector(self.config)
         self.compound_managers: Dict[str, CompoundManager] = {}
         self.auto_select = self.config.get("auto_market_select", {}).get("enabled", True)
@@ -175,6 +181,16 @@ class TradingBot:
         # --- Modules v2 ---
         self.mtf = MultiTimeframeAnalyzer(self.config)
         self.news_filter = NewsFilter(self.config)
+        self.session_engine = SessionEngine(self.config)
+        self.correlation_engine = CorrelationEngine()
+        self.news_ai = NewsAI(self.news_filter)
+        self.deriv_intelligence = DerivIntelligence()
+        self.auto_learning = AutoLearning()
+        self.hyperparameter_optimizer = HyperparameterOptimizer(lambda params: 0.0)
+        self.performance_analytics = PerformanceAnalytics()
+        self.self_optimizer = SelfOptimizer()
+        self.walk_forward_optimizer = WalkForwardOptimizer()
+        self.monte_carlo_risk = MonteCarloRisk()
         self.telegram = TelegramNotifier(self.config)
 
         # --- Telegram Command Bot (v4) ---
@@ -196,6 +212,11 @@ class TradingBot:
             clear_fn=self._telegram_clear,
             set_fn=self._telegram_set_config,
             restart_fn=self._telegram_restart,
+            gold_fn=self._telegram_gold,
+            deriv_fn=self._telegram_deriv,
+            signals_fn=self._telegram_signals,
+            quality_fn=self._telegram_quality,
+            ai_fn=self._telegram_ai,
         )
 
         # Tracking pour Telegram
@@ -248,12 +269,16 @@ class TradingBot:
         self._atr_cache: Dict[str, tuple] = {}
 
     def _load_config(self, path: str) -> dict:
+        load_typed_config(path)
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _reload_config(self):
         """Recharge la configuration depuis le fichier."""
         try:
+            if self.mode == "LIVE":
+                logger.warning("Reload refuse en LIVE: un redemarrage est requis pour les parametres critiques.")
+                return False
             new_config = self._load_config(self.config_path)
             new_config["_path"] = self.config_path
             new_config["_dry_run"] = self.dry_run
@@ -294,6 +319,8 @@ class TradingBot:
         broker_cfg = brokers_cfg.get(broker, {})
         symbols = broker_cfg.get("symbols", [])
         if symbols:
+            if broker == "deriv":
+                return list(dict.fromkeys(symbols + list(DerivConnector.SUPPORTED_SYMBOLS)))
             return symbols
         # Fallback : symboles globaux filtres par type
         all_symbols = self.config.get("trading", {}).get("symbols", [])
@@ -308,10 +335,10 @@ class TradingBot:
         """Initialise les connecteurs pour les brokers disponibles."""
         deriv_cfg = self.config.get("deriv", {})
         mt5_cfg = self.config.get("mt5", {})
-        deriv_token = (os.getenv("DERIV_API_TOKEN") or deriv_cfg.get("api_token") or "").strip()
-        mt5_login = mt5_cfg.get("login")
-        mt5_password = str(mt5_cfg.get("password") or "").strip()
-        mt5_server = str(mt5_cfg.get("server") or "").strip()
+        deriv_token = (os.getenv("DERIV_ACCESS_TOKEN") or os.getenv("DERIV_OAUTH_TOKEN") or os.getenv("DERIV_API_TOKEN") or "").strip()
+        mt5_login = os.getenv("MT5_LOGIN", "").strip()
+        mt5_password = os.getenv("MT5_PASSWORD", "").strip()
+        mt5_server = os.getenv("MT5_SERVER", "").strip()
         has_deriv_creds = bool(deriv_token)
         has_mt5_creds = bool(mt5_login not in (None, "", 0) and mt5_password and mt5_server)
 
@@ -462,7 +489,7 @@ class TradingBot:
         # 6. Verifier Telegram
         logger.info("  [6/6] Telegram...")
         tg = self.config.get("telegram", {})
-        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", tg.get("bot_token", ""))
+        telegram_token = os.getenv("TELEGRAM_TOKEN", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")
         if tg.get("enabled") and telegram_token:
             logger.info("        OK - Telegram configure")
         else:
@@ -685,6 +712,7 @@ class TradingBot:
 
     def start(self):
         setup_logging(self.config)
+        event("BOT_STARTED", "Trading bot startup", mode=self.mode, broker=self.active_broker, logger_name="bot")
         logger = logging.getLogger(__name__)
         mode = "DRY-RUN" if self.dry_run else "LIVE TRADING"
         broker_label = {
@@ -722,6 +750,7 @@ class TradingBot:
             try:
                 start_t = time.time()
                 if connector.connect():
+                    event("BROKER_CONNECTED", "Broker connection established", logger_name="broker", broker=bkr_name, simulation=self.dry_run)
                     latency = (time.time() - start_t) * 1000
                     self._record_request_metric(bkr_name, True, latency)
                     account = connector.get_account_info() or {
@@ -739,10 +768,12 @@ class TradingBot:
                     self.compound_managers[bkr_name].initialize(account.get("balance", 5))
                     logger.info("  %s OK | Donnees de marche disponibles", broker_lbl)
                 else:
+                    event("BROKER_DISCONNECTED", "Broker connection failed", logger_name="broker", level=logging.ERROR, broker=bkr_name)
                     self._record_request_metric(bkr_name, False)
                     logger.error("  %s : connexion echouee.", broker_lbl)
                     del self.connectors[bkr_name]
             except Exception as e:
+                exception("BROKER_CONNECTION_ERROR", e, broker=bkr_name)
                 self._record_request_metric(bkr_name, False)
                 logger.error("  %s : erreur de connexion - %s", broker_lbl, e)
                 del self.connectors[bkr_name]
@@ -851,6 +882,7 @@ class TradingBot:
         # Resume dry-run
         if self.dry_run and self._dry_run_trades:
             logger.info("DRY-RUN: %d trades simules, PnL: %+.2f$", len(self._dry_run_trades), self._dry_run_pnl)
+        event("BOT_STOPPED", "Trading bot stopped", mode=self.mode, logger_name="bot")
         logger.info("Robot arrete.")
 
     # ==================================================================
@@ -877,6 +909,10 @@ class TradingBot:
     def _scan_cycle(self):
         logger = logging.getLogger(__name__)
         self.cycle_count += 1
+
+        if self.telegram.enabled:
+            for alert in self.session_engine.upcoming_alerts():
+                self.telegram.notify_info("Session %s: debut dans %d minutes" % (alert["session"].title(), alert["minutes_before"]))
 
         if self.paused:
             if self.cycle_count % 20 == 0:
@@ -1192,6 +1228,26 @@ class TradingBot:
             current_price = prices[0] if pos["type"] == 0 else prices[1]
             pip_size = connector.get_pip_size(symbol)
             atr_value = self._recent_atr(bkr_name, symbol)
+            if bkr_name == "mt5":
+                candles = connector.get_ohlc_data(symbol)
+                if candles is not None:
+                    symbol_info = connector.get_symbol_info(symbol) or {}
+                    plan = self.smart_exit.calculate_exit_levels(
+                        pos, candles=candles, atr_value=atr_value,
+                        digits=int(symbol_info.get("digits", 5)),
+                    )
+                    done = self._smart_exit_tp_done.setdefault(pos["ticket"], set())
+                    actions = self.smart_exit.manage_position(
+                        pos, current_price, plan, atr_value=atr_value,
+                        connector=connector,
+                        digits=int(symbol_info.get("digits", 5)),
+                        completed_targets=done,
+                    )
+                    for target in actions["tp_reached"]:
+                        if target not in done:
+                            done.add(target)
+                    if actions["tp_reached"]:
+                        continue
             profile = self._get_symbol_profile(symbol)
             orig = {
                 "trail": rm.trailing_stop_pips,
@@ -1399,12 +1455,15 @@ class TradingBot:
 
         signal = strategy_result.get("signal")
         confidence = strategy_result.get("confidence")
+        event("SIGNAL_GENERATED", "Trading opportunity evaluated", logger_name="trading", broker=bkr_name, symbol=symbol, timeframe=self.config.get("trading", {}).get("timeframe"), signal=signal, decision_score=strategy_result.get("decision_score"), quality=strategy_result.get("quality_score"), confidence=confidence, market_regime=latest.get("volatility_regime"), spread=None, atr=latest.get("atr"), risk=getattr(rm, "max_risk_pct", None), reason=source)
         if signal not in ("BUY", "SELL"):
+            event("SIGNAL_REJECTED", "No executable signal", logger_name="trading", broker=bkr_name, symbol=symbol, reason="no_executable_signal")
             return False
         buy_probability = float(strategy_result.get("buy_probability", 0.0) or 0.0)
         sell_probability = float(strategy_result.get("sell_probability", 0.0) or 0.0)
         selected_probability = buy_probability if signal == "BUY" else sell_probability
         if selected_probability < 92.0:
+            event("SIGNAL_REJECTED", "Decision probability below threshold", logger_name="trading", broker=bkr_name, symbol=symbol, signal=signal, confidence=confidence, reason="decision_probability_below_threshold")
             logger.info(
                 "[%s] %s: decision V5 refusee, probabilite %.2f%% < 92%% | %s",
                 broker_label, symbol, selected_probability,
@@ -1421,6 +1480,7 @@ class TradingBot:
             mtf_confluence = mtf_result.get("confluence_score", 0)
             mtf_lot_mult = mtf_result.get("lot_multiplier", 1.0)
             if not mtf_result.get("confirmed", False):
+                event("SIGNAL_REJECTED", "Multi-timeframe confirmation failed", logger_name="trading", broker=bkr_name, symbol=symbol, reason="mtf_not_confirmed")
                 logger.info("[%s] %s: signal non confirme multi-TF (%s).",
                             broker_label, symbol, source)
                 self.telegram.notify_mtf_block(
@@ -1432,6 +1492,7 @@ class TradingBot:
         # --- Filtre news par symbole -------------------------------------
         safe, news_reason = self.news_filter.is_safe_to_trade(symbol)
         if not safe:
+            event("NEWS_BLOCK", news_reason, logger_name="risk", broker=bkr_name, symbol=symbol, reason="news_filter")
             logger.info("[%s] %s: trade bloque par news (%s).",
                         broker_label, symbol, news_reason)
             return False
@@ -1449,6 +1510,7 @@ class TradingBot:
             self.config.get("trading", {}).get("max_spread_pips", 10.0))
         ok_spread, spread_now = spread_ok(bid, ask, max_spread_pips, pip_size)
         if not ok_spread:
+            event("SIGNAL_REJECTED", "Spread above limit", logger_name="trading", broker=bkr_name, symbol=symbol, spread=spread_now, reason="spread_limit")
             logger.warning(
                 "[%s] %s: spread %.1f pips > limite %.1f pips. Trade annule.",
                 broker_label, symbol, spread_now, max_spread_pips)
@@ -1502,6 +1564,7 @@ class TradingBot:
         strategy_result["quality_level"] = quality["quality_level"]
         strategy_result["quality_details"] = quality["details"]
         if not quality["accepted"]:
+            event("SIGNAL_REJECTED", "Quality below threshold", logger_name="trading", broker=bkr_name, symbol=symbol, quality=quality["quality_score"], reason="quality_below_threshold")
             logger.info(
                 "[%s] %s: qualité %.2f/100 (%s), trade bloque: %s",
                 broker_label, symbol, quality["quality_score"],
@@ -1514,6 +1577,7 @@ class TradingBot:
             eff_sl_pips,
             profile.get("pip_value_per_lot", 10.0),
             respect_min=False,
+            quality_score=quality["quality_score"],
         ) * mtf_lot_mult * news_lot_mult
 
         min_lot = symbol_info.get(
@@ -1527,6 +1591,7 @@ class TradingBot:
 
         lot = feasibility_lot(raw_lot, min_lot, max_lot, lot_step)
         if lot is None:
+            event("RISK_BLOCK", "Minimum lot would exceed risk budget", logger_name="risk", broker=bkr_name, symbol=symbol, risk=rm.max_risk_pct, reason="lot_not_feasible")
             logger.warning(
                 "[%s] %s: SKIP - lot theorique (%.4f) < lot minimum (%s). "
                 "Respecter le plancher violerait la regle de risque.",
@@ -1560,6 +1625,7 @@ class TradingBot:
         lat = (time.time() - start_t) * 1000
 
         if result and result.get("success"):
+            event("ORDER_FILLED", "Order accepted by broker", logger_name="broker", broker=bkr_name, symbol=symbol, signal=signal, sl=sl, tp=tp, risk=rm.max_risk_pct)
             self._record_request_metric(bkr_name, True, lat)
             self._log_trade_csv({
                 "broker": bkr_name, "symbol": symbol, "direction": signal,
@@ -1575,12 +1641,15 @@ class TradingBot:
                 strategy_result.get("reasons", []),
                 strategy_result.get("quality_score"),
                 strategy_result.get("quality_level"),
-                strategy_result.get("quality_details", []))
+                strategy_result.get("quality_details", []),
+                sl=sl, tp=tp,
+                ai_confidence=strategy_result.get("ai_confidence"))
             if "deal" in result:
                 self._trade_open_times[result["deal"]] = datetime.now()
             rm.register_symbol_position(symbol)
             return True
 
+        event("ORDER_FAILED", "Broker rejected order", logger_name="broker", level=logging.ERROR, broker=bkr_name, symbol=symbol, reason="broker_order_failed")
         self._record_request_metric(bkr_name, False, lat)
         logger.error("[%s] %s: echec envoi ordre (resultat=%s)",
                      broker_label, symbol, result)
@@ -1988,6 +2057,21 @@ class TradingBot:
 
         return text
 
+    def _telegram_gold(self) -> str:
+        return self._telegram_status() + "\n\nStrategie: XAUUSDm / Exness"
+
+    def _telegram_deriv(self) -> str:
+        return self._telegram_status() + "\n\nStrategie: indices synthetiques / Deriv"
+
+    def _telegram_signals(self) -> str:
+        return self._telegram_positions()
+
+    def _telegram_quality(self) -> str:
+        return self._telegram_risk()
+
+    def _telegram_ai(self) -> str:
+        return self._telegram_performance()
+
     def _telegram_clear(self):
         """Remet a zero les statistiques quotidiennes."""
         self.telegram.reset_daily()
@@ -2070,7 +2154,9 @@ class TradingBot:
 def main():
     parser = argparse.ArgumentParser(description="Robot Trading v4 - Multi-Broker + Controle Telegram Avance")
     parser.add_argument("--config", type=str, default="config.json")
+    parser.add_argument("--setup", action="store_true", help="Cree .env depuis .env.example sans afficher ni demander de secrets")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--mode", choices=["PAPER", "SIMULATION", "LIVE"], default=None)
     parser.add_argument(
         "--demo-only", action="store_true",
         help="Force MT5 demo uniquement, sans aucun ordre reel",
@@ -2087,6 +2173,19 @@ def main():
     parser.add_argument("--report", default="console", choices=["console", "csv", "html"],
                         help="Type de rapport backtest")
     args = parser.parse_args()
+
+    if args.setup:
+        env_path = os.path.join(os.path.dirname(os.path.abspath(args.config)), ".env")
+        example_path = os.path.join(os.path.dirname(os.path.abspath(args.config)), ".env.example")
+        if os.path.exists(env_path):
+            print(".env existe deja; aucun fichier n'a ete modifie.")
+        elif os.path.exists(example_path):
+            import shutil
+            shutil.copyfile(example_path, env_path)
+            print(".env cree. Remplis-le localement puis relance le bot.")
+        else:
+            print("Erreur: .env.example introuvable.")
+        return
 
     if not os.path.exists(args.config):
         print("Erreur : '%s' introuvable." % args.config)
@@ -2110,6 +2209,7 @@ def main():
             broker=broker,
             demo_only=args.demo_only,
             demo_live=args.demo_live,
+            mode=args.mode,
         )
         bot.start()
 

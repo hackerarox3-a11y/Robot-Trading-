@@ -31,6 +31,19 @@ class RiskManager:
         self.max_risk_pct = risk_cfg["max_risk_per_trade_pct"]
         self.max_daily_loss_pct = risk_cfg["max_daily_loss_pct"]
         self.max_daily_trades = risk_cfg["max_daily_trades"]
+        self.daily_profit_lock_pct = risk_cfg.get("daily_profit_lock_pct", 2.0)
+        self.max_daily_drawdown_pct = risk_cfg.get(
+            "max_daily_drawdown_pct", self.max_daily_loss_pct
+        )
+        self.max_global_drawdown_pct = risk_cfg.get("max_global_drawdown_pct", 20.0)
+        self.equity_protection_pct = risk_cfg.get("equity_protection_pct", 5.0)
+        self.max_volatility_pct = risk_cfg.get("max_volatility_pct", 0.0)
+        self.consecutive_win_risk_step = risk_cfg.get("consecutive_win_risk_step", 0.1)
+        self.max_consecutive_win_multiplier = risk_cfg.get(
+            "max_consecutive_win_multiplier", 1.5
+        )
+        self.loss_recovery_factor = risk_cfg.get("loss_recovery_factor", 0.5)
+        self.risk_journal_limit = int(risk_cfg.get("risk_journal_limit", 500))
         self.use_trailing_stop = risk_cfg["use_trailing_stop"]
         self.trailing_stop_pips = risk_cfg["trailing_stop_pips"]
         self.trailing_step_pips = risk_cfg["trailing_step_pips"]
@@ -113,6 +126,7 @@ class RiskManager:
 
         # --- COMPTEURS QUOTIDIENS ---
         self.daily_pnl = 0.0
+        self.daily_start_equity = self.equity
         self.daily_trade_count = 0
         self.last_reset_date: Optional[date] = None
         self.daily_symbol_pnl: Dict[str, float] = {}
@@ -146,6 +160,10 @@ class RiskManager:
 
         # --- EXPOSITION TOTALE ---
         self.current_total_exposure = 0.0
+        self.current_volatility_pct = 0.0
+        self.emergency_stop_active = False
+        self.emergency_stop_reason = ""
+        self.risk_journal: List[Dict] = []
 
         self._reset_daily_if_needed()
 
@@ -158,6 +176,7 @@ class RiskManager:
         today = date.today()
         if self.last_reset_date != today:
             self.daily_pnl = 0.0
+            self.daily_start_equity = self.equity
             self.daily_trade_count = 0
             self.daily_symbol_pnl = {}
             self.daily_symbol_trades = {}
@@ -168,6 +187,7 @@ class RiskManager:
             logger.info(
                 f"réinitialisation quotidienne des compteurs pour le {today}"
             )
+            self._journal("daily_reset", daily_start_equity=self.daily_start_equity)
 
     # ==================================================================
     #  MISE À JOUR DU COMPTE
@@ -178,6 +198,7 @@ class RiskManager:
         self.balance = float(account_info.get("balance", self.balance))
         self.equity = float(account_info.get("equity", self.equity))
         self.currency = account_info.get("currency", self.currency)
+        self._reset_daily_if_needed()
 
         # Mise à jour du pic d'équité
         if self.equity > self.peak_equity:
@@ -193,7 +214,7 @@ class RiskManager:
         # Vérification du mode récupération
         self._check_recovery_mode()
 
-        self._reset_daily_if_needed()
+        self._check_global_protections()
 
     # ==================================================================
     #  ENREGISTREMENT D'UN TRADE
@@ -211,6 +232,7 @@ class RiskManager:
 
         self.daily_pnl += pnl
         self.daily_trade_count += 1
+        self._journal("trade", pnl=float(pnl), symbol=symbol)
 
         # Suivi par symbole
         if symbol:
@@ -261,6 +283,96 @@ class RiskManager:
     #  VÉRIFICATIONS DE RISQUE
     # ==================================================================
 
+    def calculate_dynamic_risk(self, quality_score: float,
+                               volatility_pct: Optional[float] = None) -> float:
+        """Retourne le risque par trade en pourcentage selon la qualité."""
+        quality = float(quality_score)
+        if quality >= 98:
+            risk_pct = 1.5
+        elif quality >= 95:
+            risk_pct = 1.0
+        elif quality >= 90:
+            risk_pct = 0.75
+        elif quality >= 85:
+            risk_pct = 0.5
+        elif quality >= 80:
+            risk_pct = 0.25
+        else:
+            risk_pct = 0.0
+
+        win_multiplier = min(
+            self.max_consecutive_win_multiplier,
+            1.0 + self.consecutive_wins * self.consecutive_win_risk_step,
+        )
+        loss_multiplier = self.loss_recovery_factor ** min(self.consecutive_losses, 3)
+        risk_pct *= win_multiplier * loss_multiplier
+
+        if volatility_pct is not None:
+            self.current_volatility_pct = max(0.0, float(volatility_pct))
+        if not self.is_volatility_safe():
+            risk_pct = 0.0
+
+        self._journal(
+            "dynamic_risk",
+            quality_score=quality,
+            risk_pct=round(risk_pct, 4),
+            consecutive_wins=self.consecutive_wins,
+            consecutive_losses=self.consecutive_losses,
+        )
+        return round(max(0.0, risk_pct), 4)
+
+    def calculate_synthetic_risk(self, symbol: str, probability: float = 0.0,
+                                 volatility_score: float = 0.0) -> float:
+        """Return synthetic-index risk after spike/volatility controls."""
+        if str(symbol).startswith(("BOOM", "CRASH")) and float(probability) < 90.0:
+            return 0.0
+        multiplier = 0.5 if str(symbol).startswith(("BOOM", "CRASH")) else 1.0
+        if float(volatility_score) >= 80.0:
+            multiplier *= 0.5
+        return round(self.max_risk_pct * multiplier, 4)
+
+    def emergency_stop(self, reason: str = "arrêt d'urgence manuel") -> bool:
+        """Bloque immédiatement toute nouvelle position."""
+        self.emergency_stop_active = True
+        self.emergency_stop_reason = reason
+        self._journal("emergency_stop", reason=reason)
+        logger.critical("ARRÊT D'URGENCE : %s", reason)
+        return True
+
+    def pause_after_drawdown(self, drawdown_pct: Optional[float] = None) -> bool:
+        """Déclenche une pause lorsque le drawdown journalier dépasse le seuil."""
+        drawdown = self._daily_drawdown_pct() if drawdown_pct is None else float(drawdown_pct)
+        if drawdown < self.max_daily_drawdown_pct:
+            return False
+        self._trigger_pause(
+            f"drawdown journalier {drawdown:.2f}% >= {self.max_daily_drawdown_pct:.2f}%"
+        )
+        self._journal("drawdown_pause", drawdown_pct=drawdown)
+        return True
+
+    def is_volatility_safe(self, volatility_pct: Optional[float] = None) -> bool:
+        """Indique si la volatilité actuelle autorise l'ouverture de positions."""
+        if volatility_pct is not None:
+            self.current_volatility_pct = max(0.0, float(volatility_pct))
+        return (
+            self.max_volatility_pct <= 0
+            or self.current_volatility_pct <= self.max_volatility_pct
+        )
+
+    def update_volatility(self, volatility_pct: float) -> bool:
+        """Met à jour la volatilité et retourne l'état de la protection."""
+        safe = self.is_volatility_safe(volatility_pct)
+        if not safe:
+            self._journal(
+                "volatility_protection", volatility_pct=self.current_volatility_pct
+            )
+        return safe
+
+    def get_risk_journal(self, limit: Optional[int] = None) -> List[Dict]:
+        """Retourne les événements de risque les plus récents."""
+        entries = self.risk_journal if limit is None else self.risk_journal[-max(0, int(limit)):]
+        return [dict(entry) for entry in entries]
+
     def set_total_exposure(self, exposure: float):
         """Met a jour l'exposition notionnelle totale courante."""
         self.current_total_exposure = max(0.0, float(exposure))
@@ -277,6 +389,24 @@ class RiskManager:
             (autorisé, raison) - True si autorisé, False avec raison sinon
         """
         self._reset_daily_if_needed()
+
+        if self.emergency_stop_active:
+            return False, f"arrêt d'urgence actif : {self.emergency_stop_reason}"
+
+        if self.daily_pnl >= self.balance * (self.daily_profit_lock_pct / 100.0):
+            return False, "verrou de profit quotidien actif"
+
+        if self._daily_drawdown_pct() >= self.max_daily_drawdown_pct:
+            return False, "drawdown journalier maximal atteint"
+
+        if self._global_drawdown_pct() >= self.max_global_drawdown_pct:
+            return False, "drawdown global maximal atteint"
+
+        if self.equity <= self.balance * (1.0 - self.equity_protection_pct / 100.0):
+            return False, "protection de l'equity active"
+
+        if self.current_volatility_pct > 0 and not self.is_volatility_safe():
+            return False, "protection de volatilité active"
 
         # Vérification de la pause forcée
         if self.paused_until is not None:
@@ -362,7 +492,9 @@ class RiskManager:
     # ==================================================================
 
     def calculate_lot_size(self, stop_loss_pips: float, pip_value: float = 10.0,
-                           respect_min: bool = True) -> float:
+                           respect_min: bool = True,
+                           quality_score: Optional[float] = None,
+                           volatility_pct: Optional[float] = None) -> float:
         """
         Calcule la taille du lot basée sur le risque par trade.
         Intègre le dimensionnement dynamique basé sur le win rate,
@@ -382,7 +514,10 @@ class RiskManager:
             logger.warning("stop_loss_pips <= 0, utilisation du lot par défaut")
             return self.default_lot
 
-        max_risk_amount = self.balance * (self.max_risk_pct / 100.0)
+        risk_pct = self.max_risk_pct
+        if quality_score is not None:
+            risk_pct = self.calculate_dynamic_risk(quality_score, volatility_pct)
+        max_risk_amount = self.balance * (risk_pct / 100.0)
         lot = max_risk_amount / (stop_loss_pips * pip_value)
 
         # --- Dimensionnement dynamique basé sur le win rate ---
@@ -768,6 +903,9 @@ class RiskManager:
                 0, self.max_daily_trades - self.daily_trade_count
             ),
             "risk_per_trade_amount": self.balance * (self.max_risk_pct / 100.0),
+            "dynamic_risk_levels": {
+                "80": 0.25, "85": 0.5, "90": 0.75, "95": 1.0, "98": 1.5
+            },
 
             # Séries
             "consecutive_losses": self.consecutive_losses,
@@ -779,6 +917,16 @@ class RiskManager:
             "max_session_drawdown_pct": self.max_session_drawdown_pct,
             "equity_drawdown_pct": round(equity_drawdown_pct, 2),
             "equity_curve_alert_pct": self.equity_curve_alert_pct,
+            "daily_drawdown_pct": round(self._daily_drawdown_pct(), 2),
+            "max_daily_drawdown_pct": self.max_daily_drawdown_pct,
+            "global_drawdown_pct": round(self._global_drawdown_pct(), 2),
+            "max_global_drawdown_pct": self.max_global_drawdown_pct,
+            "daily_profit_lock_active": self.daily_pnl >= self.balance * (self.daily_profit_lock_pct / 100.0),
+            "daily_profit_lock_pct": self.daily_profit_lock_pct,
+            "emergency_stop_active": self.emergency_stop_active,
+            "equity_protection_active": self.equity <= self.balance * (1.0 - self.equity_protection_pct / 100.0),
+            "volatility_pct": self.current_volatility_pct,
+            "volatility_protection_active": not self.is_volatility_safe(),
 
             # Mode récupération
             "recovery_mode": self.recovery_mode,
@@ -806,11 +954,38 @@ class RiskManager:
 
             # Actualités
             "news_risk_reduction_active": self._is_news_hour(),
+            "risk_journal_size": len(self.risk_journal),
         }
 
     # ==================================================================
     #  MÉTHODES PRIVÉES
     # ==================================================================
+
+    def _daily_drawdown_pct(self) -> float:
+        if self.daily_start_equity <= 0:
+            return 0.0
+        return max(0.0, (self.daily_start_equity - self.equity) / self.daily_start_equity * 100)
+
+    def _global_drawdown_pct(self) -> float:
+        if self.peak_equity <= 0:
+            return 0.0
+        return max(0.0, (self.peak_equity - self.equity) / self.peak_equity * 100)
+
+    def _check_global_protections(self):
+        if self._global_drawdown_pct() >= self.max_global_drawdown_pct:
+            self.emergency_stop("drawdown global maximal atteint")
+        elif self.equity <= self.balance * (1.0 - self.equity_protection_pct / 100.0):
+            self.emergency_stop("protection de l'equity active")
+        self.pause_after_drawdown()
+
+    def _journal(self, event: str, **details):
+        self.risk_journal.append({
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "event": event,
+            "details": details,
+        })
+        if len(self.risk_journal) > self.risk_journal_limit:
+            del self.risk_journal[:-self.risk_journal_limit]
 
     def _get_recent_win_rate(self) -> float:
         """

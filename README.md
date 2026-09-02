@@ -19,7 +19,9 @@ py -m unittest discover -s tests -v
 py -m compileall -q .
 ```
 
-Le test réseau Deriv est optionnel et nécessite `DERIV_API_TOKEN`:
+Le test réseau Deriv est optionnel et nécessite un accès OAuth fourni par
+`DERIV_ACCESS_TOKEN` dans l'environnement; aucun token permanent ne doit être
+stocké dans `config.json`.
 
 ```powershell
 $env:DERIV_API_TOKEN = "votre_token"

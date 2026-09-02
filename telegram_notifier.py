@@ -68,8 +68,8 @@ class TelegramNotifier:
         self.config = config
         tg = config.get("telegram", {})
         self.enabled = tg.get("enabled", False)
-        self.token = os.getenv("TELEGRAM_BOT_TOKEN", tg.get("bot_token", ""))
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", str(tg.get("chat_id", "")))
+        self.token = os.getenv("TELEGRAM_TOKEN", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+        self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
         self.notify_trades = tg.get("notify_trades", True)
         self.notify_pnl = tg.get("notify_pnl", True)
         self.notify_errors = tg.get("notify_errors", True)
@@ -305,7 +305,8 @@ class TelegramNotifier:
                            reasons=None,
                            quality_score: float = None,
                            quality_level: str = "",
-                           quality_details=None):
+                           quality_details=None, sl=None, tp=None,
+                           ai_confidence=None, drawdown=None):
         if not self.enabled or not self.notify_trades:
             return
         emoji = "\U0001f7e2" if direction == "BUY" else "\U0001f534"
@@ -338,6 +339,12 @@ class TelegramNotifier:
             text += f"\U0001f3c6 <b>Qualité: {quality_score:.0f}/100 ({quality_level})</b>\n"
             if quality_details:
                 text += "\n".join("- " + str(detail) for detail in quality_details[:9]) + "\n"
+        if sl is not None or tp is not None:
+            text += f"SL: {sl if sl is not None else '-'} | TP: {tp if tp is not None else '-'}\n"
+        if ai_confidence is not None:
+            text += f"Confiance IA: {float(ai_confidence):.1f}%\n"
+        if drawdown is not None:
+            text += f"Drawdown: {float(drawdown):.2f}%\n"
         text += f"\U0001f552 {datetime.now().strftime('%H:%M:%S')}"
 
         self._send_message(text, reply_markup=self._build_trade_keyboard())

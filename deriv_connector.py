@@ -74,13 +74,24 @@ class DerivConnector:
     heartbeat, gestion du cycle de vie des contrats et streaming.
     """
 
+    SUPPORTED_SYMBOLS = (
+        "R_10", "R_25", "R_50", "R_75", "R_100",
+        "BOOM300", "BOOM500", "BOOM600", "BOOM900", "BOOM1000",
+        "CRASH300", "CRASH500", "CRASH600", "CRASH900", "CRASH1000",
+        "stpRNG",
+    )
+
     def __init__(self, config: dict) -> None:
         self.config = config
-        deriv_cfg = config["deriv"]
+        deriv_cfg = config.get("deriv", {})
         trading_cfg = config["trading"]
 
-        self.app_id: int = deriv_cfg["app_id"]
-        self.api_token: str = os.getenv("DERIV_API_TOKEN", deriv_cfg.get("api_token", ""))
+        self.app_id: int = int(os.getenv("DERIV_APP_ID", "0") or 0)
+        # OAuth access token only; never load a permanent token from config.json.
+        self.oauth_token: str = os.getenv("DERIV_ACCESS_TOKEN", "") or os.getenv("DERIV_OAUTH_TOKEN", "")
+        if not self.oauth_token:
+            self.oauth_token = os.getenv("DERIV_API_TOKEN", "")
+        self.api_token = self.oauth_token
         self.ws_url: str = deriv_cfg.get("ws_url", "wss://ws.derivws.com/websockets/v3")
         self.symbols: List[str] = config.get("brokers", {}).get("deriv", {}).get(
             "symbols", trading_cfg["symbols"]
@@ -218,7 +229,7 @@ class DerivConnector:
         # Autorisation avec le token API
         self._set_etat(_EtatConnexion.EN_AUTHENTIFICATION)
         try:
-            await self.ws.send(json.dumps({"authorize": self.api_token}))
+            await self.ws.send(json.dumps({"authorize": self.oauth_token}))
             response = await asyncio.wait_for(self.ws.recv(), timeout=10)
             data = json.loads(response)
 
@@ -294,6 +305,27 @@ class DerivConnector:
     def is_connected(self) -> bool:
         """Verifie si la connexion est active et autorisee."""
         return self._etat == _EtatConnexion.PRET
+
+    def authorize(self) -> bool:
+        """Authorize using the short-lived DERIV_OAUTH_TOKEN environment value."""
+        if not self.connected or self.ws is None or not self.oauth_token:
+            logger.error("OAuth Deriv absent: define DERIV_OAUTH_TOKEN in the environment")
+            return False
+        if self.authorized:
+            return True
+        try:
+            return bool(self._loop.run_until_complete(self._authorize_only()))
+        except Exception as error:
+            logger.error("OAuth Deriv authorization failed: %s", error)
+            return False
+
+    async def _authorize_only(self) -> bool:
+        await self.ws.send(json.dumps({"authorize": self.oauth_token}))
+        response = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=10))
+        if response.get("error"):
+            return False
+        self._set_etat(_EtatConnexion.PRET)
+        return True
 
     # ------------------------------------------------------------------
     #  RECONNEXION AUTOMATIQUE AVEC BACKOFF EXPONENTIEL
@@ -848,6 +880,32 @@ class DerivConnector:
         self._open_contracts.pop(ticket, None)
         return True
 
+    def buy_contract(self, symbol: str, amount: float, contract_type: str = "CALL",
+                     duration: int = 5, duration_unit: str = "m") -> Optional[Dict[str, Any]]:
+        """Buy a Deriv contract through proposal then buy."""
+        order_type = ORDER_TYPE_BUY if contract_type.upper() == "CALL" else ORDER_TYPE_SELL
+        proposal = self.get_payout(symbol, order_type, amount, duration, duration_unit)
+        if proposal is None:
+            return None
+        response = self._request(
+            "buy", buy=proposal["id"], price=amount,
+            parameters=json.dumps({
+                "contract_type": contract_type.upper(), "symbol": symbol,
+                "duration": duration, "duration_unit": duration_unit,
+                "basis": "stake", "amount": amount,
+                "currency": self.account_info_cache.get("currency", "USD"),
+            }),
+        )
+        return response.get("buy") if not response.get("error") else None
+
+    def sell_contract(self, contract_id: int, price: float = 0) -> bool:
+        """Sell an open contract back to Deriv."""
+        return self.close_position(contract_id)
+
+    def close_contract(self, contract_id: int) -> bool:
+        """Explicit alias for closing an open contract."""
+        return self.close_position(contract_id)
+
     def cancel_contract(self, ticket: int) -> bool:
         """
         Annule/revend un contrat avant son expiration (sell back).
@@ -995,6 +1053,14 @@ class DerivConnector:
             open_positions.append(contract)
 
         return open_positions
+
+    def get_open_positions(self) -> List[Dict[str, Any]]:
+        """Return currently open Deriv contracts."""
+        return self.get_bot_positions()
+
+    def get_balance(self) -> float:
+        """Return the latest authorized account balance."""
+        return float(self.account_info_cache.get("balance", 0.0))
 
     def get_position_count(self) -> int:
         """Retourne le nombre de positions ouvertes par le robot."""

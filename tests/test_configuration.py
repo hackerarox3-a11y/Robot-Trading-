@@ -59,7 +59,6 @@ class ConfigurationTests(unittest.TestCase):
     def test_dry_run_does_not_attempt_broker_connection_without_credentials(self):
         previous_token = os.environ.get("DERIV_API_TOKEN")
         os.environ.pop("DERIV_API_TOKEN", None)
-        self.config["deriv"]["api_token"] = ""
         try:
             bot = TradingBot(str(ROOT / "config.json"), dry_run=True, broker="deriv")
             self.assertEqual(bot.connectors, {})
@@ -68,7 +67,6 @@ class ConfigurationTests(unittest.TestCase):
                 os.environ.pop("DERIV_API_TOKEN", None)
             else:
                 os.environ["DERIV_API_TOKEN"] = previous_token
-            self.config["deriv"]["api_token"] = ""
 
 
 if __name__ == "__main__":

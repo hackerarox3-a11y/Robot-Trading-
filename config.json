@@ -1,10 +1,10 @@
 {
-  "active_broker": "both",
-  "broker": "both",
+  "active_broker": "mt5",
+  "broker": "mt5",
 
   "brokers": {
     "deriv": {
-      "enabled": true,
+      "enabled": false,
       "symbols": ["R_75", "R_100", "BOOM1000", "CRASH1000", "frxEURUSD"]
     },
     "mt5": {
@@ -14,22 +14,17 @@
   },
 
   "mt5": {
-    "login": 0,
-    "password": "",
-    "server": "",
     "path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
   },
 
   "deriv": {
-    "app_id": 1089,
-    "api_token": "",
     "ws_url": "wss://ws.derivws.com/websockets/v3"
   },
 
   "trading": {
     "symbols": ["R_75", "R_100", "BOOM1000", "CRASH1000", "frxEURUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF"],
     "timeframe": "M5",
-    "max_open_positions": 4,
+    "max_open_positions": 6,
     "default_lot_size": 0.35,
     "max_lot_size": 10.0,
     "min_lot_size": 0.35,
@@ -37,7 +32,7 @@
     "magic_number": 987654,
     "deviation_slippage": 20,
     "close_positions_on_stop": true,
-    "max_spread_pips": 10.0
+    "max_spread_pips": 30.0
   },
 
   "symbol_profiles": {
@@ -54,13 +49,17 @@
       "break_even_after_pips": 150,
       "max_lot": 0.10,
       "strategy_weights": {
-        "trend_following": 0.40,
-        "rsi_reversal": 0.15,
-        "macd_crossover": 0.20,
+        "trend_following": 0.30,
+        "rsi_reversal": 0.12,
+        "macd_crossover": 0.16,
         "bollinger_bounce": 0.10,
-        "adx_filter": 0.15,
-        "buy_threshold": 0.55,
-        "sell_threshold": -0.55
+        "adx_filter": 0.08,
+        "stochastic": 0.08,
+        "divergence": 0.06,
+        "ichimoku": 0.06,
+        "pivot_points": 0.04,
+        "buy_threshold": 0.40,
+        "sell_threshold": -0.40
       },
       "indicators_override": {
         "ema_fast": 13,
@@ -236,9 +235,19 @@
 
   "risk_management": {
     "max_risk_per_trade_pct": 1.0,
-    "max_daily_loss_pct": 3.0,
-    "max_daily_trades": 12,
-    "max_consecutive_losses": 3,
+    "max_daily_loss_pct": 8.0,
+    "daily_profit_lock_pct": 2.0,
+    "max_daily_drawdown_pct": 8.0,
+    "max_global_drawdown_pct": 20.0,
+    "equity_protection_pct": 5.0,
+    "max_volatility_pct": 0.0,
+    "consecutive_win_risk_step": 0.1,
+    "max_consecutive_win_multiplier": 1.5,
+    "loss_recovery_factor": 0.5,
+    "risk_journal_limit": 500,
+    "max_session_drawdown_pct": 12.0,
+    "max_daily_trades": 20,
+    "max_consecutive_losses": 4,
     "use_trailing_stop": true,
     "trailing_stop_pips": 30,
     "trailing_step_pips": 10,
@@ -254,6 +263,14 @@
     "atr_period": 14,
     "atr_sl_multiplier": 1.5,
     "atr_tp_multiplier": 2.5
+  },
+
+  "smart_exit": {
+    "swing_length": 3,
+    "atr_period": 14,
+    "atr_sl_multiplier": 1.5,
+    "atr_trailing_multiplier": 2.0,
+    "tp_multipliers": [1.0, 2.0, 3.0]
   },
 
   "indicators": {
@@ -275,17 +292,22 @@
   },
 
   "strategy_weights": {
-    "trend_following": 0.35,
-    "rsi_reversal": 0.20,
-    "macd_crossover": 0.20,
-    "bollinger_bounce": 0.15,
-    "adx_filter": 0.10,
-    "buy_threshold": 0.45,
-    "sell_threshold": -0.45
+    "trend_following": 0.28,
+    "rsi_reversal": 0.15,
+    "macd_crossover": 0.15,
+    "bollinger_bounce": 0.12,
+    "adx_filter": 0.08,
+    "stochastic": 0.08,
+    "divergence": 0.06,
+    "ichimoku": 0.05,
+    "pivot_points": 0.03,
+    "volume": 0.05,
+    "buy_threshold": 0.30,
+    "sell_threshold": -0.30
   },
 
   "timing": {
-    "scan_interval_seconds": 30,
+    "scan_interval_seconds": 15,
     "candle_history_bars": 500,
     "avoid_news_minutes": 30
   },
@@ -294,8 +316,15 @@
     "enabled": false
   },
 
+  "session_engine": {
+    "alert_minutes": [30, 10]
+  },
+
   "logging": {
     "level": "INFO",
+    "directory": "logs",
+    "max_bytes": 10485760,
+    "backup_count": 5,
     "log_to_file": true,
     "log_file": "trading_bot.log",
     "log_trades_to_csv": true,
@@ -305,6 +334,60 @@
   "auto_market_select": {
     "enabled": true,
     "min_score_to_trade": 40
+  },
+
+  "smart_money": {
+    "enabled": true,
+    "weight": 0.15,
+    "swing_length": 3,
+    "equal_tolerance_atr": 0.15,
+    "min_confidence": 0.50,
+    "lookback": 160
+  },
+
+  "liquidity_engine": {
+    "swing_length": 3,
+    "equal_tolerance_atr": 0.15,
+    "min_sweep_atr": 0.10,
+    "lookback": 160
+  },
+
+  "volatility_intelligence": {
+    "enabled": true,
+    "compression_ratio": 0.75,
+    "expansion_ratio": 1.25,
+    "explosion_ratio": 1.75
+  },
+
+  "gold_expert": {
+    "enabled": true,
+    "kill_zones": ["london", "new_york", "ny_reversal"],
+    "scalp_timeframes": ["M1", "M5"],
+    "swing_timeframes": ["H1", "H4"]
+  },
+
+  "deriv_intelligence": {
+    "enabled": true,
+    "spike_probability_threshold": 90.0,
+    "max_risk_multiplier": 0.5
+  },
+
+  "timeframe_analyzer": {
+    "enabled": true,
+    "bars_per_timeframe": 300
+  },
+
+  "decision_engine": {
+    "enabled": true,
+    "min_probability": 92.0,
+    "structure_weight": 0.40,
+    "momentum_weight": 0.35,
+    "risk_weight": 0.25
+  },
+
+  "quality_engine": {
+    "enabled": true,
+    "minimum_score": 80.0
   },
 
   "compound_growth": {
@@ -342,10 +425,7 @@
 
   "telegram": {
     "enabled": true,
-    "bot_token": "",
-    "chat_id": "",
     "allowed_chat_ids": [],
-    "admin_password": "",
     "notify_trades": true,
     "notify_pnl": true,
     "notify_errors": true,

@@ -3,6 +3,11 @@ __pycache__/
 .venv/
 venv/
 .env
+*.secret
+secrets/
+logs/
+data/private/
+*.db
 .bot_state.json
 .bot_write_test
 *.log

@@ -8,6 +8,16 @@ MACD pondere par volume, Detection de divergence, Regime de volatilite.
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 import logging
+from volume_footprint import VolumeFootprint
+from institutional_vwap import InstitutionalVWAP
+from market_structure_ai import MarketStructureAI
+from divergence_ai import DivergenceAI
+from candlestick_ai import CandlestickAI
+from support_resistance_ai import SupportResistanceAI
+from volatility_intelligence import VolatilityIntelligence
+from gold_expert import GoldExpert
+from gold_orderflow import GoldOrderFlow
+from gold_volume_profile import GoldVolumeProfile
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +63,16 @@ class TechnicalAnalysis:
         self.ichimoku_tenkan = ind.get("ichimoku_tenkan", 9)
         self.ichimoku_kijun = ind.get("ichimoku_kijun", 26)
         self.ichimoku_senkou = ind.get("ichimoku_senkou", 52)
+        self.volume_footprint = VolumeFootprint()
+        self.institutional_vwap = InstitutionalVWAP()
+        self.market_structure_ai = MarketStructureAI()
+        self.divergence_ai = DivergenceAI()
+        self.candlestick_ai = CandlestickAI()
+        self.support_resistance_ai = SupportResistanceAI()
+        self.volatility_intelligence = VolatilityIntelligence(self.atr_period)
+        self.gold_expert = GoldExpert()
+        self.gold_orderflow = GoldOrderFlow()
+        self.gold_volume_profile = GoldVolumeProfile()
 
     # ------------------------------------------------------------------
     #  INDICATEURS DE BASE
@@ -677,6 +697,20 @@ class TechnicalAnalysis:
         vol_regime = self.get_volatility_regime(atr_val, close)
 
         divergence = self.detect_divergence(close, rsi_val)
+        footprint = self.volume_footprint.analyze(ohlc_data)
+        vwap = self.institutional_vwap.analyze(ohlc_data)
+        market_structure = self.market_structure_ai.analyze(ohlc_data)
+        divergence_ai = self.divergence_ai.analyze({
+            "close": close, "rsi": rsi_val, "macd": macd_line,
+            "volume": volume if volume is not None else [],
+            "cumulative_delta": footprint["cumulative_delta"],
+        })
+        candlestick_patterns = self.candlestick_ai.analyze(ohlc_data)
+        support_resistance = self.support_resistance_ai.analyze(ohlc_data)
+        volatility_intelligence = self.volatility_intelligence.analyze(ohlc_data)
+        gold_expert = self.gold_expert.analyze(ohlc_data, timeframe=self.config.get("trading", {}).get("timeframe", "M5"))
+        gold_orderflow = self.gold_orderflow.analyze(ohlc_data)
+        gold_volume_profile = self.gold_volume_profile.analyze(ohlc_data)
 
         result = {
             "ema_fast": ema_f, "ema_medium": ema_m,
@@ -701,6 +735,16 @@ class TechnicalAnalysis:
             "divergence": divergence,
             "volume": volume,
             "avg_volume": avg_volume,
+            "volume_footprint": footprint,
+            "institutional_vwap": vwap,
+            "market_structure_ai": market_structure,
+            "divergence_ai": divergence_ai,
+            "candlestick_ai": candlestick_patterns,
+            "support_resistance_ai": support_resistance,
+            "volatility_intelligence": volatility_intelligence,
+            "gold_expert": gold_expert,
+            "gold_orderflow": gold_orderflow,
+            "gold_volume_profile": gold_volume_profile,
         }
         return result
 

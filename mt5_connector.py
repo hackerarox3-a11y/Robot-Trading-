@@ -6,6 +6,7 @@ de sante et logique de reprises pour les ordres.
 """
 
 import time
+import os
 import logging
 import MetaTrader5 as mt5
 import numpy as np
@@ -61,12 +62,12 @@ class MT5Connector:
 
     def __init__(self, config: dict) -> None:
         self.config = config
-        mt5_cfg = config["mt5"]
+        mt5_cfg = config.get("mt5", {})
         trading_cfg = config["trading"]
 
-        self.login: int = mt5_cfg["login"]
-        self.password: str = mt5_cfg["password"]
-        self.server: str = mt5_cfg["server"]
+        self.login: int = int(os.getenv("MT5_LOGIN", "0") or 0)
+        self.password: str = os.getenv("MT5_PASSWORD", "")
+        self.server: str = os.getenv("MT5_SERVER", "")
         self.mt5_path: str = mt5_cfg["path"]
         self.symbols: List[str] = config.get("brokers", {}).get("mt5", {}).get(
             "symbols", trading_cfg["symbols"]
@@ -658,6 +659,50 @@ class MT5Connector:
                 closed += 1
         logger.info(f"Fermeture de {closed} positions")
         return closed
+
+    def close_partial_position(self, ticket: int, portion: float) -> bool:
+        """Ferme une fraction d'une position MT5 par son ticket."""
+        position = mt5.positions_get(ticket=ticket)
+        if position is None or len(position) == 0:
+            logger.warning(f"Position {ticket} non trouvee pour fermeture partielle")
+            return False
+
+        pos = position[0]
+        fraction = float(portion)
+        volume = pos.volume * fraction if 0 < fraction <= 1 else fraction
+        info = mt5.symbol_info(pos.symbol)
+        step = float(getattr(info, "volume_step", 0.01) or 0.01)
+        minimum = float(getattr(info, "volume_min", step) or step)
+        volume = int(volume / step) * step
+        if volume < minimum or volume >= pos.volume:
+            if volume >= pos.volume:
+                return self.close_position(ticket)
+            logger.warning(f"Volume partiel invalide pour la position {ticket}: {volume}")
+            return False
+
+        tick = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            return False
+        is_buy = pos.type == mt5.POSITION_TYPE_BUY
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": pos.symbol,
+            "volume": volume,
+            "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,
+            "position": ticket,
+            "price": tick.bid if is_buy else tick.ask,
+            "deviation": self.deviation,
+            "magic": self.magic_number,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self._detect_filling_mode(pos.symbol),
+        }
+        result = mt5.order_send(request)
+        success = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
+        if success:
+            logger.info(f"Fermeture partielle position {ticket}: {volume} lots")
+        else:
+            logger.warning(f"Fermeture partielle position {ticket} echouee")
+        return success
 
     def modify_position_sl(self, ticket: int, new_sl: float) -> bool:
         """

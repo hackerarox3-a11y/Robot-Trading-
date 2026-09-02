@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from smart_money import SmartMoneyAnalyzer
 from decision_engine import DecisionEngine
 from quality_engine import QualityEngine
+from liquidity_engine import LiquidityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ class StrategyEngine:
         self.smart_money = SmartMoneyAnalyzer(config)
         self.decision_engine = DecisionEngine(config)
         self.quality_engine = QualityEngine(config)
+        self.liquidity_engine = LiquidityEngine(config)
         self.timeframe_analyzer = timeframe_analyzer
 
         # Seuils de base
@@ -699,6 +701,10 @@ class StrategyEngine:
         }
         smart_money_score = self.smart_money.score(smart_money) if ohlc_data is not None else 0.0
         total += self.w_smart_money * smart_money_score
+        liquidity = self.liquidity_engine.analyze(ohlc_data) if ohlc_data is not None else {
+            "liquidity_taken": False, "direction": "none", "confidence": 0.0,
+            "reason": "missing_ohlc"
+        }
 
         # Determiner le signal avec seuils adaptatifs, apres confirmation SMC.
         if total >= adapted_buy:
@@ -749,6 +755,9 @@ class StrategyEngine:
         if not quality["accepted"]:
             signal = "HOLD"
 
+        if ohlc_data is not None and not liquidity.get("liquidity_taken", False):
+            signal = "HOLD"
+
         # Score de qualite
         quality = self._calculate_signal_quality(scores, total, vals)
 
@@ -764,6 +773,7 @@ class StrategyEngine:
             "strength": strength,
             "smart_money": smart_money,
             "smart_money_score": round(smart_money_score, 4),
+            "liquidity": liquidity,
             "timeframe_analysis": timeframe_result,
             "decision_score": decision["decision_score"],
             "buy_probability": decision["buy_probability"],

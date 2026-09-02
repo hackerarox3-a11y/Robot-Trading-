@@ -25,7 +25,8 @@ class SmartMoneyAnalyzer:
 
     @staticmethod
     def _event(detected: bool = False, direction: str = "none", **extra) -> Dict[str, Any]:
-        result = {"detected": bool(detected), "direction": direction}
+        result = {"detected": bool(detected), "direction": direction,
+                  "confidence": float(extra.pop("confidence", 0.0))}
         result.update(extra)
         return result
 
@@ -110,18 +111,18 @@ class SmartMoneyAnalyzer:
             bullish_candle = close[index] > open_[index]
             bearish_candle = close[index] < open_[index]
             if direction == "bullish" and bearish_candle:
-                return {"detected": True, "direction": direction, "index": index, "high": float(high[index]), "low": float(low[index])}
+                return {"detected": True, "direction": direction, "index": index, "high": float(high[index]), "low": float(low[index]), "confidence": 70.0}
             if direction == "bearish" and bullish_candle:
-                return {"detected": True, "direction": direction, "index": index, "high": float(high[index]), "low": float(low[index])}
-        return {"detected": False, "direction": direction}
+                return {"detected": True, "direction": direction, "index": index, "high": float(high[index]), "low": float(low[index]), "confidence": 70.0}
+        return {"detected": False, "direction": direction, "confidence": 0.0}
 
     def _fvg(self, high: np.ndarray, low: np.ndarray) -> Dict[str, Any]:
         for index in range(len(high) - 1, 1, -1):
             if low[index] > high[index - 2]:
-                return {"detected": True, "direction": "bullish", "index": index, "low": float(high[index - 2]), "high": float(low[index])}
+                return {"detected": True, "direction": "bullish", "index": index, "low": float(high[index - 2]), "high": float(low[index]), "confidence": 75.0}
             if high[index] < low[index - 2]:
-                return {"detected": True, "direction": "bearish", "index": index, "low": float(high[index]), "high": float(low[index - 2])}
-        return {"detected": False, "direction": "none"}
+                return {"detected": True, "direction": "bearish", "index": index, "low": float(high[index]), "high": float(low[index - 2]), "confidence": 75.0}
+        return {"detected": False, "direction": "none", "confidence": 0.0}
 
     def _liquidity_sweep(self, close: np.ndarray, high: np.ndarray, low: np.ndarray, swings: Dict[str, List[Dict[str, float]]], atr: float) -> Dict[str, Any]:
         if not swings["highs"] or not swings["lows"]:
@@ -148,13 +149,78 @@ class SmartMoneyAnalyzer:
                 equal_low = {"detected": True, "level": round((first["price"] + second["price"]) / 2, 8), "indices": [first["index"], second["index"]]}
         return {"equal_high": equal_high or {"detected": False}, "equal_low": equal_low or {"detected": False}}
 
+    @staticmethod
+    def _structure_event(detected: bool, direction: str = "none", confidence: float = 0.0, **extra) -> Dict[str, Any]:
+        return {"detected": bool(detected), "direction": direction,
+                "confidence": round(max(0.0, min(100.0, float(confidence))), 2), **extra}
+
+    def _advanced_structures(self, data, swings, structure, atr, bullish_ob, bearish_ob, levels):
+        close, high, low = data["close"], data["high"], data["low"]
+        last_close = float(close[-1])
+        highs, lows = swings["highs"], swings["lows"]
+
+        def break_event(point, bullish, confidence):
+            if point is None:
+                return self._structure_event(False)
+            detected = last_close > point["price"] if bullish else last_close < point["price"]
+            return self._structure_event(detected, "bullish" if bullish else "bearish", confidence,
+                                         level=point["price"], index=point["index"])
+
+        internal_high = highs[-2] if len(highs) > 1 else (highs[-1] if highs else None)
+        internal_low = lows[-2] if len(lows) > 1 else (lows[-1] if lows else None)
+        external_high = highs[-1] if highs else None
+        external_low = lows[-1] if lows else None
+        internal_bull = break_event(internal_high, True, 78.0)
+        internal_bear = break_event(internal_low, False, 78.0)
+        external_bull = break_event(external_high, True, 90.0)
+        external_bear = break_event(external_low, False, 90.0)
+        internal_bos = internal_bull if internal_bull["detected"] else internal_bear
+        external_bos = external_bull if external_bull["detected"] else external_bear
+
+        if structure["bos"].get("detected"):
+            structure["bos"]["confidence"] = 90.0 if external_bos["detected"] else 78.0
+        if structure["choch"].get("detected"):
+            structure["choch"]["confidence"] = 85.0
+
+        mitigation = self._structure_event(False)
+        breaker = self._structure_event(False)
+        for block, block_direction in ((bullish_ob, "bullish"), (bearish_ob, "bearish")):
+            if not block.get("detected"):
+                continue
+            touched = float(low[-1]) <= block["high"] and float(high[-1]) >= block["low"]
+            respected = last_close > block["high"] if block_direction == "bullish" else last_close < block["low"]
+            if touched:
+                event = self._structure_event(True, block_direction, 72.0, index=block["index"], high=block["high"], low=block["low"])
+                if respected:
+                    breaker = self._structure_event(True, "bearish" if block_direction == "bullish" else "bullish", 82.0, index=block["index"], high=block["high"], low=block["low"])
+                else:
+                    mitigation = event
+
+        grab = self._liquidity_sweep(last_close, high, low, swings, atr)
+        liquidity_grab = dict(grab)
+        liquidity_grab["confidence"] = 88.0 if grab.get("detected") else 0.0
+        inducement_direction = "bullish" if internal_bos["direction"] == "bullish" and levels["equal_low"].get("detected") else "bearish" if internal_bos["direction"] == "bearish" and levels["equal_high"].get("detected") else "none"
+        inducement = self._structure_event(inducement_direction != "none", inducement_direction, 65.0 if inducement_direction != "none" else 0.0)
+        range_high, range_low = max(high[-self.lookback:]), min(low[-self.lookback:])
+        midpoint = (range_high + range_low) / 2.0
+        premium = self._structure_event(last_close > midpoint, "bearish", 70.0 if last_close > midpoint else 0.0, level=midpoint)
+        discount = self._structure_event(last_close < midpoint, "bullish", 70.0 if last_close < midpoint else 0.0, level=midpoint)
+        return {"internal_bos": internal_bos, "external_bos": external_bos,
+                "mitigation_block": mitigation, "breaker_block": breaker,
+                "liquidity_grab": liquidity_grab, "inducement": inducement,
+                "premium_zone": premium, "discount_zone": discount}
+
     def analyze(self, candles: Dict[str, np.ndarray]) -> Dict[str, Any]:
         empty = {
             "trend_structure": "ranging", "bos": self._event(), "choch": self._event(),
-            "bullish_order_block": {"detected": False}, "bearish_order_block": {"detected": False},
-            "bullish_fvg": {"detected": False}, "bearish_fvg": {"detected": False},
-            "liquidity_sweep": self._event(), "equal_high": {"detected": False}, "equal_low": {"detected": False},
+            "bullish_order_block": {"detected": False, "confidence": 0.0}, "bearish_order_block": {"detected": False, "confidence": 0.0},
+            "bullish_fvg": {"detected": False, "confidence": 0.0}, "bearish_fvg": {"detected": False, "confidence": 0.0},
+            "liquidity_sweep": self._event(), "equal_high": {"detected": False, "confidence": 0.0}, "equal_low": {"detected": False, "confidence": 0.0},
             "premium_discount": {"premium": False, "discount": False, "equilibrium": False}, "confidence": 0.0,
+            "internal_bos": self._structure_event(False), "external_bos": self._structure_event(False),
+            "mitigation_block": self._structure_event(False), "breaker_block": self._structure_event(False),
+            "liquidity_grab": self._structure_event(False), "inducement": self._structure_event(False),
+            "premium_zone": self._structure_event(False), "discount_zone": self._structure_event(False),
         }
         if not self.enabled:
             return empty
@@ -167,8 +233,8 @@ class SmartMoneyAnalyzer:
         structure = self._structure(close, swings)
         bullish_ob = self._order_block(data, "bullish", swings)
         bearish_ob = self._order_block(data, "bearish", swings)
-        bullish_fvg = {"detected": False}
-        bearish_fvg = {"detected": False}
+        bullish_fvg = {"detected": False, "confidence": 0.0}
+        bearish_fvg = {"detected": False, "confidence": 0.0}
         fvg = self._fvg(high, low)
         if fvg["detected"]:
             if fvg["direction"] == "bullish":
@@ -183,12 +249,16 @@ class SmartMoneyAnalyzer:
         sweep = self._liquidity_sweep(close, high, low, swings, atr)
         confirmations = sum(bool(item.get("detected")) for item in (structure["bos"], structure["choch"], bullish_ob, bearish_ob, bullish_fvg, bearish_fvg, sweep, levels["equal_high"], levels["equal_low"]))
         confidence = min(1.0, 0.25 + confirmations * 0.08 + (0.12 if structure["trend"] != "ranging" else 0.0))
+        advanced = self._advanced_structures(
+            data, swings, structure, atr, bullish_ob, bearish_ob, levels
+        )
         return {
             "trend_structure": structure["trend"], "bos": structure["bos"], "choch": structure["choch"],
             "bullish_order_block": bullish_ob, "bearish_order_block": bearish_ob,
             "bullish_fvg": bullish_fvg, "bearish_fvg": bearish_fvg, "liquidity_sweep": sweep,
             "equal_high": levels["equal_high"], "equal_low": levels["equal_low"],
             "premium_discount": zones, "confidence": round(confidence, 3),
+            **advanced,
         }
 
     def score(self, result: Dict[str, Any]) -> float:
