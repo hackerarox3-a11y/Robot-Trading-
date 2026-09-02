@@ -641,7 +641,8 @@ class TechnicalAnalysis:
         close = ohlc_data["close"]
         high = ohlc_data["high"]
         low = ohlc_data["low"]
-        volume = ohlc_data.get("volume")
+        volume = ohlc_data.get("volume", ohlc_data.get("tick_volume"))
+        avg_volume = self.sma(volume, 20) if volume is not None else None
 
         ema_f = self.ema(close, self.ema_fast)
         ema_m = self.ema(close, self.ema_medium)
@@ -698,6 +699,8 @@ class TechnicalAnalysis:
             "pivots_weekly": pivots_weekly,
             "volatility_regime": vol_regime,
             "divergence": divergence,
+            "volume": volume,
+            "avg_volume": avg_volume,
         }
         return result
 

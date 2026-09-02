@@ -24,6 +24,54 @@ from decision_engine import DecisionEngine
 logger = logging.getLogger(__name__)
 
 
+INDICATOR_WEIGHT_ALIASES = {
+    "ema": ("ema", "trend_following"),
+    "rsi": ("rsi", "rsi_reversal"),
+    "macd": ("macd", "macd_crossover"),
+    "adx": ("adx", "adx_filter"),
+    "bollinger": ("bollinger", "bollinger_bounce"),
+    "ichimoku": ("ichimoku",),
+    "stochastic": ("stochastic",),
+    "pivot": ("pivot", "pivot_points"),
+    "divergence": ("divergence",),
+    "volume": ("volume",),
+}
+
+DEFAULT_INDICATOR_WEIGHTS = {
+    "ema": 0.20,
+    "rsi": 0.10,
+    "macd": 0.15,
+    "adx": 0.10,
+    "bollinger": 0.10,
+    "ichimoku": 0.10,
+    "stochastic": 0.08,
+    "pivot": 0.05,
+    "divergence": 0.07,
+    "volume": 0.05,
+}
+
+
+def normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+    """Return the ten indicator weights normalized to a total of exactly 1."""
+    values = {}
+    for indicator, aliases in INDICATOR_WEIGHT_ALIASES.items():
+        configured = next((weights.get(alias) for alias in aliases if alias in weights), None)
+        try:
+            value = float(configured) if configured is not None else DEFAULT_INDICATOR_WEIGHTS[indicator]
+        except (TypeError, ValueError):
+            value = DEFAULT_INDICATOR_WEIGHTS[indicator]
+        values[indicator] = max(0.0, value)
+
+    total = sum(values.values())
+    if total <= 0:
+        values = DEFAULT_INDICATOR_WEIGHTS.copy()
+        total = sum(values.values())
+    normalized = {key: value / total for key, value in values.items()}
+    # Correct floating point residue on the final component.
+    normalized["volume"] += 1.0 - sum(normalized.values())
+    return normalized
+
+
 class StrategyEngine:
     """
     Combine plusieurs strategies d'analyse technique avec un systeme
@@ -37,18 +85,18 @@ class StrategyEngine:
         weights = config["strategy_weights"]
         ind = config["indicators"]
 
-        # Poids des strategies existantes
-        self.w_trend = weights["trend_following"]
-        self.w_rsi = weights["rsi_reversal"]
-        self.w_macd = weights["macd_crossover"]
-        self.w_bollinger = weights["bollinger_bounce"]
-        self.w_adx = weights["adx_filter"]
-
-        # Poids des nouvelles strategies (defaut si non dans config)
-        self.w_stochastic = weights.get("stochastic", 0.15)
-        self.w_divergence = weights.get("divergence", 0.10)
-        self.w_ichimoku = weights.get("ichimoku", 0.10)
-        self.w_pivot = weights.get("pivot_points", 0.08)
+        normalized_weights = normalize_weights(weights)
+        self.normalized_weights = normalized_weights
+        self.w_trend = normalized_weights["ema"]
+        self.w_rsi = normalized_weights["rsi"]
+        self.w_macd = normalized_weights["macd"]
+        self.w_bollinger = normalized_weights["bollinger"]
+        self.w_adx = normalized_weights["adx"]
+        self.w_stochastic = normalized_weights["stochastic"]
+        self.w_divergence = normalized_weights["divergence"]
+        self.w_ichimoku = normalized_weights["ichimoku"]
+        self.w_pivot = normalized_weights["pivot"]
+        self.w_volume = normalized_weights["volume"]
         self.w_smart_money = float(config.get("smart_money", {}).get("weight", 0.15))
         self.smart_money = SmartMoneyAnalyzer(config)
         self.decision_engine = DecisionEngine(config)
@@ -213,6 +261,22 @@ class StrategyEngine:
                 return -0.6
 
         return 0.3
+
+    def _score_volume(self, vals: Dict) -> float:
+        """Use volume as directional confirmation, never as a standalone signal."""
+        volume = vals.get("volume")
+        average = vals.get("avg_volume")
+        if volume is None or average is None or float(average) <= 0:
+            return 0.0
+        ratio = float(volume) / float(average)
+        if ratio < 1.0:
+            return 0.0
+        ema_fast = vals.get("ema_fast")
+        ema_slow = vals.get("ema_slow")
+        if ema_fast is None or ema_slow is None or ema_fast == ema_slow:
+            return 0.0
+        strength = min(1.0, (ratio - 1.0) / 1.5)
+        return strength if ema_fast > ema_slow else -strength
 
     # ------------------------------------------------------------------
     #  NOUVELLES STRATEGIES
@@ -611,6 +675,7 @@ class StrategyEngine:
             "divergence": self._score_divergence(vals),
             "ichimoku": self._score_ichimoku(vals),
             "pivot_points": self._score_pivot_points(vals),
+            "volume": self._score_volume(vals),
         }
 
         # Score total pondere
@@ -624,6 +689,7 @@ class StrategyEngine:
             + self.w_divergence * scores["divergence"]
             + self.w_ichimoku * scores["ichimoku"]
             + self.w_pivot * scores["pivot_points"]
+            + self.w_volume * scores["volume"]
         )
 
         smart_money = self.smart_money.analyze(ohlc_data) if ohlc_data is not None else {

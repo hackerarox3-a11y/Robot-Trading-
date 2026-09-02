@@ -5,6 +5,7 @@ from pathlib import Path
 
 from deriv_connector import DerivConnector
 from main import TradingBot
+from strategy_engine import normalize_weights
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,15 +26,18 @@ class ConfigurationTests(unittest.TestCase):
     def test_xau_symbol_and_strategy_weights_are_configured(self):
         self.assertIn("XAUUSDm", self.config["brokers"]["mt5"]["symbols"])
         weights = self.config["strategy_weights"]
-        total_weight = sum(
-            weights[name]
-            for name in (
-                "trend_following", "rsi_reversal", "macd_crossover",
-                "bollinger_bounce", "adx_filter", "stochastic",
-                "divergence", "ichimoku", "pivot_points",
-            )
-        )
+        total_weight = sum(normalize_weights(weights).values())
         self.assertAlmostEqual(total_weight, 1.0, places=6)
+
+    def test_weight_normalization_accepts_legacy_names(self):
+        normalized = normalize_weights({
+            "trend_following": 2,
+            "rsi_reversal": 1,
+            "volume": 1,
+        })
+        self.assertAlmostEqual(sum(normalized.values()), 1.0, places=6)
+        self.assertGreater(normalized["ema"], normalized["rsi"])
+        self.assertGreater(normalized["volume"], 0)
         self.assertEqual(
             self.config["brokers"]["mt5"]["symbols"],
             ["XAUUSDm", "EURUSDm", "GBPUSDm", "USDJPYm", "USDCHFm"],
