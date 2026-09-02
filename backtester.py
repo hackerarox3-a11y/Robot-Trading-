@@ -234,7 +234,7 @@ class Backtester:
                 latest = ta.get_latest_values(analysis)
                 current_price = float(closes[i])
 
-                signal = strategy.generate_signal(latest, current_price)
+                signal = strategy.generate_signal(latest, current_price, window)
                 if signal["signal"] == "HOLD":
                     equity_curve.append(balance)
                     continue

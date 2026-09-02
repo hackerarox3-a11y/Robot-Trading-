@@ -18,6 +18,8 @@ Strategies incluses :
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from smart_money import SmartMoneyAnalyzer
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +48,8 @@ class StrategyEngine:
         self.w_divergence = weights.get("divergence", 0.10)
         self.w_ichimoku = weights.get("ichimoku", 0.10)
         self.w_pivot = weights.get("pivot_points", 0.08)
+        self.w_smart_money = float(config.get("smart_money", {}).get("weight", 0.15))
+        self.smart_money = SmartMoneyAnalyzer(config)
 
         # Seuils de base
         self.buy_threshold = weights["buy_threshold"]
@@ -567,7 +571,8 @@ class StrategyEngine:
     #  COMBINAISON DES SCORES
     # ------------------------------------------------------------------
 
-    def generate_signal(self, latest_values: Dict, close_price: float) -> Dict:
+    def generate_signal(self, latest_values: Dict, close_price: float,
+                        ohlc_data: Optional[Dict] = None) -> Dict:
         """
         Combine toutes les strategies et genere un signal de trading.
 
@@ -617,7 +622,13 @@ class StrategyEngine:
             + self.w_pivot * scores["pivot_points"]
         )
 
-        # Determiner le signal avec seuils adaptatifs
+        smart_money = self.smart_money.analyze(ohlc_data) if ohlc_data is not None else {
+            "trend_structure": "ranging", "confidence": 0.0
+        }
+        smart_money_score = self.smart_money.score(smart_money) if ohlc_data is not None else 0.0
+        total += self.w_smart_money * smart_money_score
+
+        # Determiner le signal avec seuils adaptatifs, apres confirmation SMC.
         if total >= adapted_buy:
             signal = "BUY"
         elif total <= adapted_sell:
@@ -636,6 +647,13 @@ class StrategyEngine:
             max_thresh = max(abs(adapted_buy), abs(adapted_sell))
             confidence = max(0, (1.0 - abs(total) / max_thresh) * 100)
 
+        # Une structure SMC forte peut invalider un signal technique oppose.
+        if smart_money.get("confidence", 0.0) >= self.smart_money.min_confidence:
+            smc_direction = "BUY" if smart_money_score > 0.35 else "SELL" if smart_money_score < -0.35 else None
+            if smc_direction and signal not in ("HOLD", smc_direction):
+                signal = "HOLD"
+                confidence = min(confidence, 50.0)
+
         # Score de qualite
         quality = self._calculate_signal_quality(scores, total, vals)
 
@@ -649,6 +667,8 @@ class StrategyEngine:
             "confidence": round(max(0, confidence), 1),
             "quality_score": quality,
             "strength": strength,
+            "smart_money": smart_money,
+            "smart_money_score": round(smart_money_score, 4),
         }
 
         logger.info(

@@ -300,17 +300,35 @@ class TradingBot:
 
     def _init_connectors(self):
         """Initialise les connecteurs pour les brokers disponibles."""
-        # Toujours essayer Deriv
-        self.connectors["deriv"] = DerivConnector(self.config)
-        logger.info("Connecteur Deriv initialise.")
+        deriv_cfg = self.config.get("deriv", {})
+        mt5_cfg = self.config.get("mt5", {})
+        deriv_token = (os.getenv("DERIV_API_TOKEN") or deriv_cfg.get("api_token") or "").strip()
+        mt5_login = mt5_cfg.get("login")
+        mt5_password = str(mt5_cfg.get("password") or "").strip()
+        mt5_server = str(mt5_cfg.get("server") or "").strip()
+        has_deriv_creds = bool(deriv_token)
+        has_mt5_creds = bool(mt5_login not in (None, "", 0) and mt5_password and mt5_server)
 
-        # Essayer MT5 si disponible
-        if MT5_AVAILABLE and self.active_broker in ("mt5", "both"):
+        if self.dry_run and not (has_deriv_creds or has_mt5_creds):
+            logger.warning(
+                "Mode dry-run: aucune credential broker fournie. Le robot demarre sans connexion broker."
+            )
+            return
+
+        if has_deriv_creds and self.active_broker in ("deriv", "both"):
+            self.connectors["deriv"] = DerivConnector(self.config)
+            logger.info("Connecteur Deriv initialise.")
+
+        if MT5_AVAILABLE and self.active_broker in ("mt5", "both") and has_mt5_creds:
             self.connectors["mt5"] = MT5Connector(self.config)
             logger.info("Connecteur MT5 (Exness) initialise.")
         elif not MT5_AVAILABLE and self.active_broker in ("mt5",):
             logger.warning("MT5 demande mais MetaTrader5 pas installe. Deriv sera utilise.")
             self.active_broker = "deriv"
+
+        if self.active_broker == "deriv" and "deriv" not in self.connectors and not self.dry_run:
+            self.connectors["deriv"] = DerivConnector(self.config)
+            logger.info("Connecteur Deriv initialise par defaut.")
 
     def _init_trades_csv(self):
         if not self.config["logging"].get("log_trades_to_csv", True):
@@ -349,7 +367,7 @@ class TradingBot:
             for s in self._get_symbols_for_broker(bkr):
                 all_symbols.add(s)
         for symbol in all_symbols:
-            profile = profiles.get(symbol, {})
+            profile = self._get_symbol_profile(symbol)
             if profile:
                 sym_config = copy.deepcopy(self.config)
                 if "indicators_override" in profile:
@@ -364,7 +382,12 @@ class TradingBot:
                 self._symbol_engines[symbol] = {"ta": self.technical, "strategy": self.strategy}
 
     def _get_symbol_profile(self, symbol: str) -> dict:
-        return self.config.get("symbol_profiles", {}).get(symbol, {})
+        profiles = self.config.get("symbol_profiles", {})
+        if symbol in profiles:
+            return profiles[symbol]
+        if symbol.endswith("m") and symbol[:-1] in profiles:
+            return profiles[symbol[:-1]]
+        return {}
 
     def _get_active_brokers(self) -> List[str]:
         """Retourne la liste des brokers actifs."""
@@ -719,6 +742,15 @@ class TradingBot:
                 del self.connectors[bkr_name]
 
         if not self._get_active_brokers():
+            if self.dry_run:
+                logger.warning("Aucun broker connecte en mode dry-run. Le bot continue en simulation idle.")
+                self.running = True
+                logger.info("Robot demarre en mode simulation sans connexion broker.")
+                try:
+                    self._main_loop()
+                finally:
+                    self.stop()
+                return
             logger.error("Aucun broker connecte. Verifie les credentials et la connexion internet.")
             self.cmd_bot.stop()
             return
@@ -1071,7 +1103,7 @@ class TradingBot:
             return None
         current_price = prices[1]
         evaluation = self.market_selector.evaluate_market(symbol, analysis, latest, current_price)
-        signal_result = strategy.generate_signal(latest, current_price)
+        signal_result = strategy.generate_signal(latest, current_price, ohlc)
         evaluation["signal"] = signal_result["signal"]
         if signal_result["signal"] != "HOLD" and self.mtf.enabled:
             mtf_result = self.mtf.analyze(connector, symbol, analysis, latest, signal_result["signal"])
@@ -1126,7 +1158,7 @@ class TradingBot:
         if prices is None:
             return
         current_price = prices[1]
-        signal_result = strategy.generate_signal(latest, current_price)
+        signal_result = strategy.generate_signal(latest, current_price, ohlc)
         signal = signal_result["signal"]
         confidence = signal_result["confidence"]
 
@@ -1266,7 +1298,7 @@ class TradingBot:
         if prices is None:
             return
         current_price = prices[1]
-        signal_result = strategy.generate_signal(latest, current_price)
+        signal_result = strategy.generate_signal(latest, current_price, ohlc)
         signal = signal_result["signal"]
         if signal == "HOLD":
             return

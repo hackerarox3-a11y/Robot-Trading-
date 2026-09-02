@@ -706,7 +706,7 @@ class MultiTimeframeAnalyzer:
                     "volume_confirmation": 0.5, "sr_levels": []}
         current_price = prices[1]
 
-        result = strategy.generate_signal(latest, current_price)
+        result = strategy.generate_signal(latest, current_price, ohlc)
         tf_signal = result["signal"]
         tf_score = abs(result["total_score"])
         agree = (tf_signal == base_signal)
